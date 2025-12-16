@@ -1,0 +1,22 @@
+{
+  "name": "noctura-zk-toolkit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "setup": "tsx scripts/setup.ts",
+    "prove": "tsx scripts/prove.ts",
+    "witness:demo": "tsx scripts/witness-demo.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.0.8",
+    "ffjavascript": "0.3.1",
+    "snarkjs": "0.7.5",
+    "tsx": "4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.5"
+  }
+}

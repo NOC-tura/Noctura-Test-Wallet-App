@@ -1,0 +1,158 @@
+diff --git a/node_modules/@coral-xyz/anchor/dist/browser/index.js b/node_modules/@coral-xyz/anchor/dist/browser/index.js
+index 53de36f..433b1a4 100644
+--- a/node_modules/@coral-xyz/anchor/dist/browser/index.js
++++ b/node_modules/@coral-xyz/anchor/dist/browser/index.js
+@@ -825,7 +825,12 @@ async function simulateTransaction(connection, transaction, signers, commitment,
+                 console.error(res.error.message, logTrace);
+             }
+         }
+-        throw new SendTransactionError("failed to simulate transaction: " + res.error.message, logs);
++        throw new SendTransactionError({
++            action: "simulate",
++            signature: "",
++            transactionMessage: "failed to simulate transaction: " + res.error.message,
++            logs,
++        });
+     }
+     return res.result;
+ }
+@@ -991,7 +996,14 @@ class AnchorProvider {
+                 }
+                 else {
+                     const logs = (_d = failedTx.meta) === null || _d === void 0 ? void 0 : _d.logMessages;
+-                    throw !logs ? err : new SendTransactionError(err.message, logs);
++                    throw !logs
++                        ? err
++                        : new SendTransactionError({
++                            action: "send",
++                            signature: txSig,
++                            transactionMessage: err.message,
++                            logs,
++                        });
+                 }
+             }
+             else {
+@@ -1059,7 +1071,14 @@ class AnchorProvider {
+                     }
+                     else {
+                         const logs = (_c = failedTx.meta) === null || _c === void 0 ? void 0 : _c.logMessages;
+-                        throw !logs ? err : new SendTransactionError(err.message, logs);
++                        throw !logs
++                            ? err
++                            : new SendTransactionError({
++                                action: "send",
++                                signature: txSig,
++                                transactionMessage: err.message,
++                                logs,
++                            });
+                     }
+                 }
+                 else {
+diff --git a/node_modules/@coral-xyz/anchor/dist/cjs/provider.js b/node_modules/@coral-xyz/anchor/dist/cjs/provider.js
+index 698da2e..4aabc5e 100644
+--- a/node_modules/@coral-xyz/anchor/dist/cjs/provider.js
++++ b/node_modules/@coral-xyz/anchor/dist/cjs/provider.js
+@@ -116,7 +116,14 @@ class AnchorProvider {
+                 }
+                 else {
+                     const logs = (_d = failedTx.meta) === null || _d === void 0 ? void 0 : _d.logMessages;
+-                    throw !logs ? err : new web3_js_1.SendTransactionError(err.message, logs);
++                       throw !logs
++                           ? err
++                           : new web3_js_1.SendTransactionError({
++                               action: "send",
++                               signature: txSig,
++                               transactionMessage: err.message,
++                               logs,
++                           });
+                 }
+             }
+             else {
+@@ -184,7 +191,14 @@ class AnchorProvider {
+                     }
+                     else {
+                         const logs = (_c = failedTx.meta) === null || _c === void 0 ? void 0 : _c.logMessages;
+-                        throw !logs ? err : new web3_js_1.SendTransactionError(err.message, logs);
++                           throw !logs
++                               ? err
++                               : new web3_js_1.SendTransactionError({
++                                   action: "send",
++                                   signature: txSig,
++                                   transactionMessage: err.message,
++                                   logs,
++                               });
+                     }
+                 }
+                 else {
+diff --git a/node_modules/@coral-xyz/anchor/dist/cjs/utils/rpc.js b/node_modules/@coral-xyz/anchor/dist/cjs/utils/rpc.js
+index 73f7c4b..e870f1e 100644
+--- a/node_modules/@coral-xyz/anchor/dist/cjs/utils/rpc.js
++++ b/node_modules/@coral-xyz/anchor/dist/cjs/utils/rpc.js
+@@ -103,7 +103,12 @@ async function simulateTransaction(connection, transaction, signers, commitment,
+                 console.error(res.error.message, logTrace);
+             }
+         }
+-        throw new web3_js_1.SendTransactionError("failed to simulate transaction: " + res.error.message, logs);
++        throw new web3_js_1.SendTransactionError({
++            action: "simulate",
++            signature: "",
++            transactionMessage: "failed to simulate transaction: " + res.error.message,
++            logs,
++        });
+     }
+     return res.result;
+ }
+diff --git a/node_modules/@coral-xyz/anchor/dist/esm/provider.js b/node_modules/@coral-xyz/anchor/dist/esm/provider.js
+index 12e110a..d7cdfc7 100644
+--- a/node_modules/@coral-xyz/anchor/dist/esm/provider.js
++++ b/node_modules/@coral-xyz/anchor/dist/esm/provider.js
+@@ -113,7 +113,14 @@ export class AnchorProvider {
+                 }
+                 else {
+                     const logs = (_d = failedTx.meta) === null || _d === void 0 ? void 0 : _d.logMessages;
+-                    throw !logs ? err : new SendTransactionError(err.message, logs);
++                    throw !logs
++                        ? err
++                        : new SendTransactionError({
++                            action: "send",
++                            signature: txSig,
++                            transactionMessage: err.message,
++                            logs,
++                        });
+                 }
+             }
+             else {
+@@ -181,7 +188,14 @@ export class AnchorProvider {
+                     }
+                     else {
+                         const logs = (_c = failedTx.meta) === null || _c === void 0 ? void 0 : _c.logMessages;
+-                        throw !logs ? err : new SendTransactionError(err.message, logs);
++                        throw !logs
++                            ? err
++                            : new SendTransactionError({
++                                action: "send",
++                                signature: txSig,
++                                transactionMessage: err.message,
++                                logs,
++                            });
+                     }
+                 }
+                 else {
+diff --git a/node_modules/@coral-xyz/anchor/dist/esm/utils/rpc.js b/node_modules/@coral-xyz/anchor/dist/esm/utils/rpc.js
+index 37500d1..98ff328 100644
+--- a/node_modules/@coral-xyz/anchor/dist/esm/utils/rpc.js
++++ b/node_modules/@coral-xyz/anchor/dist/esm/utils/rpc.js
+@@ -97,7 +97,12 @@ export async function simulateTransaction(connection, transaction, signers, comm
+                 console.error(res.error.message, logTrace);
+             }
+         }
+-        throw new SendTransactionError("failed to simulate transaction: " + res.error.message, logs);
++        throw new SendTransactionError({
++            action: "simulate",
++            signature: "",
++            transactionMessage: "failed to simulate transaction: " + res.error.message,
++            logs,
++        });
+     }
+     return res.result;
+ }

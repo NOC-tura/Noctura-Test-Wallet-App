@@ -1,0 +1,4 @@
+[target.bpfel-unknown-unknown]
+rustflags = ["--cfg", "target_os=\"solana\""]
+[target.sbf-solana-solana]
+rustflags = ["--cfg", "target_os=\"solana\""]

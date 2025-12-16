@@ -1,0 +1,15 @@
+[package]
+name = "light-poseidon"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "light_poseidon"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]

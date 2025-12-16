@@ -1,0 +1,70 @@
+# Dependencies
+node_modules/
+bower_components/
+
+# Build outputs
+dist/
+build/
+target/
+*.log
+*.wasm
+
+# Environment files - SENSITIVE DATA
+.env
+.env.local
+.env.production
+.env.staging
+**/.env
+
+# Private keys and credentials - NEVER COMMIT
+*.pem
+*.key
+id.json
+**/id.json
+*.json.keypair
+/config/solana/id.json
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Rust/Cargo
+Cargo.lock
+target/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage and testing
+coverage/
+.nyc_output/
+
+# Anchor
+.anchor/
+test-ledger/
+
+# Circuit build artifacts (large files)
+*.ptau
+*.r1cs
+*.sym
+*.zkey
+*.dat
+
+# Keep example files but ignore actual env files
+!.env.example
+!**/.env.example
