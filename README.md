@@ -97,6 +97,13 @@ Key UX flows:
 - Transparent mode uses native SOL transfers. Shielded mode routes through the proof sandbox (ready to be wired into the on-chain verifier once proofs are finalized).
 - Cyber B/W palette powered by Tailwind for fast Netlify deployment.
 
+## Public Devnet Testing Scope
+
+- What works: deposit → shielded transfer → withdraw on devnet; witness builders and transaction builders are production-ready.
+- Known gaps: commitment explorer UI, Merkle root sync display, and view-key manager are not yet shipped; prover lacks queue/GPU/cache so high load may slow proofs.
+- Tester guidance: expect occasional prover latency; report tx signatures for failing flows; proofs generated off-chain via prover service.
+- Environment: use testnet/devnet keys only; keep `.env` local; copy from `.env.example` and never commit secrets.
+
 ## Next Steps
 
 1. Finish Circom witness builders and align `public_inputs` with Anchor verifier expectations.
