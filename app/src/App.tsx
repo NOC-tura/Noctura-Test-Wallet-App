@@ -1500,9 +1500,36 @@ export default function App() {
               availableNotes: availableNotes.length,
             });
 
-            // Select the first 2 available notes for transfer-multi
-            // If more than 2 available, we'll combine the first 2 and leave others
-            const inputNotes = availableNotes.slice(0, 2).map(note => ({
+            // Sort notes by amount (largest first) and select best 2 that can cover the amount
+            const sortedNotes = [...availableNotes].sort((a, b) => {
+              const amountA = BigInt(a.amount);
+              const amountB = BigInt(b.amount);
+              return amountA > amountB ? -1 : amountA < amountB ? 1 : 0;
+            });
+
+            // Find the best pair of 2 notes that can cover the requested amount
+            let selectedNotes: typeof availableNotes = [];
+            const feeAtoms = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
+            const totalNeeded = atoms + feeAtoms;
+            
+            // Try to find 2 notes that together can cover the amount
+            for (let i = 0; i < sortedNotes.length - 1; i++) {
+              for (let j = i + 1; j < sortedNotes.length; j++) {
+                const total = BigInt(sortedNotes[i].amount) + BigInt(sortedNotes[j].amount);
+                if (total >= totalNeeded) {
+                  selectedNotes = [sortedNotes[i], sortedNotes[j]];
+                  break;
+                }
+              }
+              if (selectedNotes.length > 0) break;
+            }
+
+            // If no pair found, just take the 2 largest
+            if (selectedNotes.length === 0) {
+              selectedNotes = sortedNotes.slice(0, 2);
+            }
+
+            const inputNotes = selectedNotes.map(note => ({
               secret: BigInt(note.secret),
               amount: BigInt(note.amount),
               tokenMint: BigInt(note.tokenMintField),
@@ -1514,11 +1541,10 @@ export default function App() {
 
             // Calculate total input amount from the 2 notes
             const totalInputAmount = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
-            console.log('[Transfer] Total from 2 input notes:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
+            console.log('[Transfer] Selected 2 notes with total:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
 
             // For SOL transfers: fee is in NOC (separate check below)
             // For NOC transfers: fee is deducted from NOC amount
-            const feeAtoms = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
             const recipientNoteAmount = atoms + feeAtoms;
             const changeAmount = totalInputAmount - recipientNoteAmount;
 
