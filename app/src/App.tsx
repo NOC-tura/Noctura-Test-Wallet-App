@@ -1516,14 +1516,34 @@ export default function App() {
             const totalInputAmount = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
             console.log('[Transfer] Total from 2 input notes:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
 
-            // Create output notes for transfer-multi
-            const feeAtoms = PRIVACY_FEE_ATOMS;
+            // For SOL transfers: fee is in NOC (separate check below)
+            // For NOC transfers: fee is deducted from NOC amount
+            const feeAtoms = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
             const recipientNoteAmount = atoms + feeAtoms;
             const changeAmount = totalInputAmount - recipientNoteAmount;
 
             if (changeAmount < 0n) {
               const totalNeeded = Number(recipientNoteAmount) / Math.pow(10, decimals);
-              throw new Error(`The first 2 notes total ${Number(totalInputAmount) / Math.pow(10, decimals)} ${tokenType}, but you need ${totalNeeded} ${tokenType} (${parsedAmount} ${tokenType} + 0.25 NOC fee). Use a smaller amount or select different notes.`);
+              const feeDisplay = tokenType === 'NOC' ? ' + 0.25 NOC fee' : '';
+              throw new Error(`The first 2 notes total ${Number(totalInputAmount) / Math.pow(10, decimals)} ${tokenType}, but you need ${totalNeeded} ${tokenType} (${parsedAmount} ${tokenType}${feeDisplay}). Use a smaller amount or select different notes.`);
+            }
+
+            // For SOL transfers, verify NOC fee balance separately
+            if (tokenType === 'SOL') {
+              console.log('[Transfer] Multi-note SOL transfer - checking NOC fee balance...');
+              const nocNotes = shieldedNotes.filter(n => 
+                !n.spent && 
+                n.owner === walletAddress && 
+                (n.tokenType === 'NOC' || !n.tokenType || n.tokenMintAddress === NOC_TOKEN_MINT)
+              );
+              const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+              if (totalNocAvailable < PRIVACY_FEE_ATOMS) {
+                const errorMsg = `Insufficient NOC for privacy fee. Need 0.25 NOC but only have ${Number(totalNocAvailable) / 1_000_000} NOC shielded.`;
+                console.error('[Transfer] ❌ INSUFFICIENT NOC FEE:', errorMsg);
+                setStatus(errorMsg);
+                throw new Error(errorMsg);
+              }
+              console.log('[Transfer] ✓ Sufficient NOC for privacy fee');
             }
 
             // Create merkle proofs for both input notes
