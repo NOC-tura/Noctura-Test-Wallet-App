@@ -22,6 +22,7 @@ import { parseNocAmount, prepareDeposit, snapshotNote, pubkeyToField, createNote
 import { submitShieldedDeposit, fetchSpentNullifiers, PRIVACY_FEE_ATOMS } from './lib/shieldProgram';
 import { buildMerkleProof } from './lib/merkle';
 import { serializeWithdrawWitness, serializeTransferWitness } from '@zk-witness/index';
+import { serializeTransferMultiWitness } from '@zk-witness/builders/transfer-multi';
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from './types/shield';
 import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl } from './lib/constants';
@@ -1489,55 +1490,80 @@ export default function App() {
         const ataMintKey = tokenType === 'SOL' ? new PublicKey(WSOL_MINT) : new PublicKey(NOC_TOKEN_MINT);
         
         if (atoms > noteAmount) {
-          // Multi-note spend: sequentially consolidate then withdraw
+          // Multi-note spend: Check if we have enough total
           if (atoms <= totalAvailable) {
-            console.log('[Transfer] Sequential consolidation: combining', availableNotes.length, 'notes for', parsedAmount, tokenType, 'send');
-            
+            // We have enough across multiple notes - use transfer-multi circuit
+            console.log('[Transfer] ✓ Multi-note transfer detected:', {
+              requested: parsedAmount,
+              noteAmount,
+              totalAvailable: totalAvailableDisplay.toFixed(decimals === 9 ? 9 : 6),
+              availableNotes: availableNotes.length,
+            });
+
+            // Select the first 2 available notes for transfer-multi
+            // If more than 2 available, we'll combine the first 2 and leave others
+            const inputNotes = availableNotes.slice(0, 2).map(note => ({
+              secret: BigInt(note.secret),
+              amount: BigInt(note.amount),
+              tokenMint: BigInt(note.tokenMintField),
+              blinding: BigInt(note.blinding),
+              rho: BigInt(note.rho),
+              commitment: BigInt(note.commitment),
+              nullifier: BigInt(note.nullifier),
+            }));
+
+            // Calculate total input amount from the 2 notes
+            const totalInputAmount = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
+            console.log('[Transfer] Total from 2 input notes:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
+
+            // Create output notes for transfer-multi
             const feeAtoms = PRIVACY_FEE_ATOMS;
-            const recipientNoteAmount = atoms;
-            const totalNeeded = recipientNoteAmount + feeAtoms;
-            const changeAmount = totalAvailable - totalNeeded;
-            
+            const recipientNoteAmount = atoms + feeAtoms;
+            const changeAmount = totalInputAmount - recipientNoteAmount;
+
             if (changeAmount < 0n) {
-              const totalNeededDisplay = Number(totalNeeded) / Math.pow(10, decimals);
-              throw new Error(`Insufficient shielded ${tokenType}. Need ${totalNeededDisplay.toFixed(decimals === 9 ? 9 : 6)} ${tokenType} (${parsedAmount} + 0.25 NOC fee), have ${totalAvailableDisplay.toFixed(decimals === 9 ? 9 : 6)} ${tokenType}.`);
+              const totalNeeded = Number(recipientNoteAmount) / Math.pow(10, decimals);
+              throw new Error(`The first 2 notes total ${Number(totalInputAmount) / Math.pow(10, decimals)} ${tokenType}, but you need ${totalNeeded} ${tokenType} (${parsedAmount} ${tokenType} + 0.25 NOC fee). Use a smaller amount or select different notes.`);
             }
-            
-            console.log('[Transfer] Planning sequential consolidation:', {
-              notesCount: availableNotes.length,
-              totalAmount: totalAvailableDisplay,
-              targetSend: parsedAmount,
-              fee: 0.25,
-              change: Number(changeAmount) / Math.pow(10, decimals),
+
+            // Create merkle proofs for both input notes
+            const merkleProofsMulti = inputNotes.map(note => buildMerkleProof(availableNotes, { secret: note.secret.toString() } as any));
+
+            const recipientNote = createNoteFromSecrets(recipientNoteAmount, mintKey);
+            const changeNote = createNoteFromSecrets(changeAmount, mintKey);
+
+            console.log('[Transfer] Serializing transfer-multi witness...');
+            const transferMultiWitness = serializeTransferMultiWitness({
+              inputNotes,
+              merkleProofs: merkleProofsMulti,
+              outputNote1: recipientNote,
+              outputNote2: changeNote,
             });
-            
-            // Store the multi-note send plan
-            (window as unknown as Record<string, unknown>).__pendingTransfer = {
-              isSequentialConsolidate: true,
-              allNotes: availableNotes,
-              targetAmount: atoms,
-              recipientKey: recipientKey.toBase58(),
-              totalAvailable,
-              changeAmount,
-              tokenType,
-              feeAtoms: PRIVACY_FEE_ATOMS.toString(),
-            };
-            
+            console.log('[Transfer] Transfer-multi witness serialized');
+
+            setStatus('Generating multi-note proof…');
+            console.log('[Transfer] Calling proveCircuit(transfer-multi)...');
+            const proof = await proveCircuit('transfer-multi', transferMultiWitness);
+            console.log('[Transfer] Multi-note proof received!');
+
+            logProofPayload('transfer-multi', {
+              inputNullifiers: inputNotes.map(n => n.nullifier.toString()),
+              merkleRoot: merkleProofsMulti[0].root.toString(),
+              outputCommitment1: recipientNote.commitment.toString(),
+              outputCommitment2: changeNote.commitment.toString(),
+              publicInputs: proof.publicInputs,
+              proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
+            });
+
             const recipientAta = getAssociatedTokenAddressSync(ataMintKey, recipientKey, true).toBase58();
+
+            // Store state for the two-step process
+            setPendingWithdrawalProof(proof);
+            setPendingWithdrawalNote(spendNote);
             setPendingRecipientAta(recipientAta);
-            
-            setTransferReview({
-              recipient: trimmedRecipient,
-              amount: parsedAmount,
-              atoms,
-              feeNoc: 0.25,
-              changeAmount: Number(changeAmount) / Math.pow(10, decimals),
-              tokenType,
-              transparentPayout,
-            });
-            
-            setStatus(`Review: Sending ${parsedAmount} ${tokenType} (will consolidate ${availableNotes.length} notes in ${availableNotes.length} steps). Privacy fee: 0.25 NOC. Change: ${(Number(changeAmount) / Math.pow(10, decimals)).toFixed(decimals === 9 ? 9 : 6)} ${tokenType}.`);
-            return;
+
+            // Continue with the rest of the transfer flow...
+            // (The code will continue below as normal)
           } else {
             const errorMsg = `Insufficient shielded balance. You have ${totalAvailableDisplay.toFixed(decimals === 9 ? 9 : 6)} ${tokenType} shielded, but tried to send ${parsedAmount} ${tokenType}.`;
             console.error('[Transfer] ❌ INSUFFICIENT BALANCE:', errorMsg);
@@ -1564,6 +1590,20 @@ export default function App() {
             throw new Error(errorMsg);
           }
           console.log('[Transfer] ✓ Sufficient NOC for privacy fee');
+        }
+
+        // For NOC transfers, verify that we have enough SOL in transparent balance for network fees
+        if (tokenType === 'NOC') {
+          console.log('[Transfer] Checking SOL balance for NOC transfer network fees...');
+          const minSolForFee = 0.00005; // Minimum SOL needed for network fee
+          console.log('[Transfer] Transparent SOL balance:', solBalance, 'SOL, needed:', minSolForFee, 'SOL');
+          if (solBalance < minSolForFee) {
+            const errorMsg = `Insufficient SOL for network fees. Need at least ${minSolForFee} SOL in transparent balance to withdraw ${parsedAmount} NOC from shielded vault. Current transparent balance: ${solBalance} SOL.`;
+            console.error('[Transfer] ❌ INSUFFICIENT SOL FOR FEES:', errorMsg);
+            setStatus(errorMsg);
+            throw new Error(errorMsg);
+          }
+          console.log('[Transfer] ✓ Sufficient SOL for network fees');
         }
         
         setStatus('Building Merkle proof…');
@@ -1880,6 +1920,7 @@ export default function App() {
         let consolidatedAmount = BigInt(notes[0].amount);
         let currentNullifier = notes[0].nullifier;
         let consolidatedNotes: ShieldedNoteRecord[] = [];
+        let currentNote = notes[0]; // Track the current note we're spending
         
         // Step 1: Combine all notes using transfer circuit iteratively
         for (let i = 1; i < notes.length; i++) {
@@ -1888,24 +1929,24 @@ export default function App() {
           const nextNote = notes[i];
           const nextAmount = BigInt(nextNote.amount);
           
-          // Build merkle proof for current consolidated note
+          // For merkle proof, include both original unspent notes AND previously consolidated notes
+          // This way, proofs for later consolidation steps can reference the intermediate consolidated notes
           const allNotesForMerkle = [
             ...shieldedNotes.filter(n => n.owner === walletAddress && !n.spent),
             ...consolidatedNotes,
           ];
           
-          const currentNoteRecord = notes[i - 1]; // Use the original note from input
-          const merkleProof = buildMerkleProof(allNotesForMerkle, currentNoteRecord);
+          const merkleProof = buildMerkleProof(allNotesForMerkle, currentNote);
           
-          // Create transfer witness: current consolidated amount + next note
+          // Create transfer witness: input is the CURRENT note we're spending (original or previously consolidated)
           const inputNote: Note = {
-            secret: BigInt(currentNoteRecord.secret),
+            secret: BigInt(currentNote.secret),
             amount: consolidatedAmount,
-            tokenMint: BigInt(currentNoteRecord.tokenMintField),
-            blinding: BigInt(currentNoteRecord.blinding),
-            rho: BigInt(currentNoteRecord.rho),
-            commitment: BigInt(currentNoteRecord.commitment),
-            nullifier: BigInt(currentNoteRecord.nullifier),
+            tokenMint: BigInt(currentNote.tokenMintField),
+            blinding: BigInt(currentNote.blinding),
+            rho: BigInt(currentNote.rho),
+            commitment: BigInt(currentNote.commitment),
+            nullifier: BigInt(currentNote.nullifier),
           };
           
           const newConsolidatedAmount = consolidatedAmount + nextAmount;
@@ -1928,13 +1969,13 @@ export default function App() {
           // Submit to relayer
           const result = await relayTransfer({
             proof,
-            nullifier: currentNoteRecord.nullifier,
+            nullifier: currentNote.nullifier,
             outputCommitment1: newConsolidatedNote.commitment.toString(),
             outputCommitment2: dummy.commitment.toString(),
           });
           
           console.log('[SequentialConsolidate] Step', i, 'succeeded:', result.signature);
-          markNoteSpent(currentNoteRecord.nullifier);
+          markNoteSpent(currentNote.nullifier);
           
           // Store the consolidated note for next iteration
           const newConsolidatedRecord: ShieldedNoteRecord = {
@@ -1956,9 +1997,10 @@ export default function App() {
           consolidatedNotes.push(newConsolidatedRecord);
           addShieldedNote(newConsolidatedRecord);
           
-          // Update for next iteration
+          // Update for next iteration - use the consolidated note record for next proof
           consolidatedAmount = newConsolidatedAmount;
           currentNullifier = newConsolidatedNote.nullifier.toString();
+          currentNote = newConsolidatedRecord; // Use the newly consolidated note for next iteration
         }
         
         console.log('[SequentialConsolidate] All notes consolidated. Total:', Number(consolidatedAmount) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType);
@@ -3377,6 +3419,33 @@ export default function App() {
     );
   }, [txSuccess]);
 
+  const shieldedErrorModal = useMemo(() => {
+    if (!shieldedSendError) return null;
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur flex items-center justify-center px-4 z-50">
+        <div className="bg-surface rounded-2xl max-w-md w-full p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center flex-shrink-0">
+              <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <p className="text-sm uppercase tracking-[0.3em] text-red-400 font-semibold">Transfer Failed</p>
+              <p className="text-sm text-neutral-200 mt-2">{shieldedSendError}</p>
+            </div>
+          </div>
+          <button
+            className="w-full px-4 py-2 bg-red-500/20 border border-red-500/40 text-red-300 rounded-xl hover:bg-red-500/30 transition-colors"
+            onClick={() => setShieldedSendError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    );
+  }, [shieldedSendError]);
+
   const renderOnboarding = () => (
     <main className="min-h-screen bg-background text-accent flex items-center justify-center px-6 py-12 relative">
       {!hasWallet && showIntroModal && (
@@ -3594,7 +3663,9 @@ export default function App() {
               await startShieldedTransfer(recipient, amount, token);
               return;
             } catch (err) {
-              setStatus((err as Error).message);
+              const message = (err as Error).message;
+              setStatus(message);
+              setShieldedSendError(message);
               return;
             }
           }
@@ -3632,6 +3703,7 @@ export default function App() {
       )}
       
       {shieldedConfirmModal}
+      {shieldedErrorModal}
       {stagedSendModal}
       {transactionConfirmModal}
       {transactionSuccessModal}
