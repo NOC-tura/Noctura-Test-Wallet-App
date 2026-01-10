@@ -3,7 +3,7 @@ pragma circom 2.1.9;
 include "../node_modules/circomlib/circuits/poseidon.circom";
 include "./merkle.circom";
 
-// Multi-Input Shielded Transfer: spend 2 notes, create 2 output notes
+// Multi-Input Shielded Transfer: spend up to 2 notes, create 2 output notes
 // Proves: input1 + input2 = output1 + output2 (amount conservation)
 template ShieldedTransferMulti() {
     var TREE_HEIGHT = 20;

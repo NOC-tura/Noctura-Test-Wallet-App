@@ -2,14 +2,14 @@ import { Note } from '../note';
 import { MerkleProof } from '../merkle';
 
 export interface TransferMultiWitnessInput {
-  inputNotes: Note[];  // 2 notes to combine
+  inputNotes: Note[];  // 1-2 notes to combine
   merkleProofs: MerkleProof[];  // One proof per input note
   outputNote1: Note;   // recipient note
   outputNote2: Note;   // change note back to sender
 }
 
 export interface TransferMultiWitness {
-  // Input notes (exactly 2)
+  // Input notes (up to 2, unused slots zeroed)
   inSecret1: string;
   inAmount1: string;
   inBlinding1: string;
@@ -48,32 +48,44 @@ export function serializeTransferMultiWitness({
   outputNote1,
   outputNote2,
 }: TransferMultiWitnessInput): TransferMultiWitness {
-  // Must have exactly 2 input notes
-  if (inputNotes.length !== 2) {
-    throw new Error(`transfer-multi requires exactly 2 input notes, got ${inputNotes.length}`);
-  }
+  // Pad to 2 inputs with zero notes
+  const paddedInputs: Note[] = [...inputNotes];
+  const paddedProofs: MerkleProof[] = [...merkleProofs];
   
-  if (merkleProofs.length !== 2) {
-    throw new Error(`transfer-multi requires exactly 2 merkle proofs, got ${merkleProofs.length}`);
+  while (paddedInputs.length < 2) {
+    paddedInputs.push({
+      secret: 0n,
+      amount: 0n,
+      tokenMint: inputNotes[0].tokenMint,
+      blinding: 0n,
+      rho: 0n,
+      commitment: 0n,
+      nullifier: 0n,
+    });
+    paddedProofs.push({
+      pathElements: Array(20).fill(0n),
+      pathIndices: Array(20).fill(0n),
+      root: merkleProofs[0].root,
+    });
   }
 
   return {
-    inSecret1: inputNotes[0].secret.toString(),
-    inAmount1: inputNotes[0].amount.toString(),
-    inBlinding1: inputNotes[0].blinding.toString(),
-    inRho1: inputNotes[0].rho.toString(),
+    inSecret1: paddedInputs[0].secret.toString(),
+    inAmount1: paddedInputs[0].amount.toString(),
+    inBlinding1: paddedInputs[0].blinding.toString(),
+    inRho1: paddedInputs[0].rho.toString(),
     
-    inSecret2: inputNotes[1].secret.toString(),
-    inAmount2: inputNotes[1].amount.toString(),
-    inBlinding2: inputNotes[1].blinding.toString(),
-    inRho2: inputNotes[1].rho.toString(),
+    inSecret2: paddedInputs[1].secret.toString(),
+    inAmount2: paddedInputs[1].amount.toString(),
+    inBlinding2: paddedInputs[1].blinding.toString(),
+    inRho2: paddedInputs[1].rho.toString(),
     
     tokenMint: inputNotes[0].tokenMint.toString(),
     
-    pathElements1: merkleProofs[0].pathElements.map((x) => x.toString()),
-    pathIndices1: merkleProofs[0].pathIndices.map((x) => x.toString()),
-    pathElements2: merkleProofs[1].pathElements.map((x) => x.toString()),
-    pathIndices2: merkleProofs[1].pathIndices.map((x) => x.toString()),
+    pathElements1: paddedProofs[0].pathElements.map((x) => x.toString()),
+    pathIndices1: paddedProofs[0].pathIndices.map((x) => x.toString()),
+    pathElements2: paddedProofs[1].pathElements.map((x) => x.toString()),
+    pathIndices2: paddedProofs[1].pathIndices.map((x) => x.toString()),
     merkleRoot: merkleProofs[0].root.toString(),
     
     outSecret1: outputNote1.secret.toString(),
@@ -83,8 +95,8 @@ export function serializeTransferMultiWitness({
     outAmount2: outputNote2.amount.toString(),
     outBlinding2: outputNote2.blinding.toString(),
     
-    nullifier1: inputNotes[0].nullifier.toString(),
-    nullifier2: inputNotes[1].nullifier.toString(),
+    nullifier1: paddedInputs[0].nullifier.toString(),
+    nullifier2: paddedInputs[1].nullifier.toString(),
   };
 }
 

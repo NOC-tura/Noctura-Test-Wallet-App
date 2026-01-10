@@ -1500,7 +1500,7 @@ export default function App() {
               availableNotes: availableNotes.length,
             });
 
-            // Sort notes by amount (largest first) and select best 2 that can cover the amount
+            // Sort notes by amount (largest first) and select best 2 notes that can cover the amount
             const sortedNotes = [...availableNotes].sort((a, b) => {
               const amountA = BigInt(a.amount);
               const amountB = BigInt(b.amount);
@@ -1524,10 +1524,12 @@ export default function App() {
               if (selectedNotes.length > 0) break;
             }
 
-            // If no pair found, just take the 2 largest
+            // If no 2-note combination works, just take the 2 largest
             if (selectedNotes.length === 0) {
-              selectedNotes = sortedNotes.slice(0, 2);
+              selectedNotes = sortedNotes.slice(0, Math.min(2, sortedNotes.length));
             }
+
+            console.log('[Transfer] Selected', selectedNotes.length, 'notes for transfer-multi');
 
             const inputNotes = selectedNotes.map(note => ({
               secret: BigInt(note.secret),
@@ -1539,9 +1541,9 @@ export default function App() {
               nullifier: BigInt(note.nullifier),
             }));
 
-            // Calculate total input amount from the 2 notes
+            // Calculate total input amount from the selected notes
             const totalInputAmount = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
-            console.log('[Transfer] Selected 2 notes with total:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
+            console.log('[Transfer] Selected notes total:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
 
             // For SOL transfers: fee is in NOC (separate check below)
             // For NOC transfers: fee is deducted from NOC amount
@@ -1551,7 +1553,7 @@ export default function App() {
             if (changeAmount < 0n) {
               const totalNeeded = Number(recipientNoteAmount) / Math.pow(10, decimals);
               const feeDisplay = tokenType === 'NOC' ? ' + 0.25 NOC fee' : '';
-              throw new Error(`The first 2 notes total ${Number(totalInputAmount) / Math.pow(10, decimals)} ${tokenType}, but you need ${totalNeeded} ${tokenType} (${parsedAmount} ${tokenType}${feeDisplay}). Use a smaller amount or select different notes.`);
+              throw new Error(`The selected ${selectedNotes.length} notes total ${Number(totalInputAmount) / Math.pow(10, decimals)} ${tokenType}, but you need ${totalNeeded} ${tokenType} (${parsedAmount} ${tokenType}${feeDisplay}). Use a smaller amount or consolidate more notes.`);
             }
 
             // For SOL transfers, verify NOC fee balance separately
