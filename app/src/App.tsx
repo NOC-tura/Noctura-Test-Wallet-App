@@ -1540,9 +1540,24 @@ export default function App() {
                 setStatus(`Consolidating ${availableNotes.length} notes into 2-4 notes… (this may take 2-3 min)`);
                 
                 // Partition notes for consolidation (groups of up to 8 at a time)
-                const consolidationSteps = partitionNotesForConsolidation(availableNotes, mintKey);
+                // Ensure all notes have matching token mints before consolidation
+                const expectedTokenMint = mintKey.toBase58();
+                const notesWithMatchingMint = availableNotes.filter(n => n.tokenMintAddress === expectedTokenMint);
+                
+                if (notesWithMatchingMint.length < availableNotes.length) {
+                  console.warn('[Transfer] Filtered notes with mismatched token mints for consolidation', {
+                    totalAvailable: availableNotes.length,
+                    matchingMint: notesWithMatchingMint.length,
+                    expectedMint: expectedTokenMint,
+                  });
+                }
+                
+                const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, mintKey);
                 const consolidatedNotes: ShieldedNoteRecord[] = [];
                 const walletAddress = keypair.publicKey.toBase58();
+                
+                // Build the complete merkle tree with all notes (spent and unspent)
+                const allNotesInTree = [...shieldedNotes, ...consolidatedNotes];
                 
                 for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {
                   const step = consolidationSteps[stepIdx];
@@ -1551,16 +1566,11 @@ export default function App() {
                   setStatus(`Consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`);
                   console.log(`[Transfer] Consolidation step ${stepNum}: merging ${step.inputNotes.length} notes`);
                   
-                  // Build witness
-                  const allNotesForMerkle = [
-                    ...availableNotes.filter(n => !step.inputRecords.some(r => r.nullifier === n.nullifier)),
-                    ...consolidatedNotes,
-                  ];
-                  
+                  // Build witness using all notes in the tree for merkle proof
                   const consolidateWitness = buildConsolidationWitness({
                     inputRecords: step.inputRecords,
                     outputNote: step.outputNote,
-                    allNotesForMerkle,
+                    allNotesForMerkle: allNotesInTree,
                   });
                   
                   // Generate proof
@@ -1596,6 +1606,7 @@ export default function App() {
                     tokenType: tokenType as 'SOL' | 'NOC',
                   };
                   consolidatedNotes.push(consolidatedRecord);
+                  allNotesInTree.push(consolidatedRecord);
                   addShieldedNote(consolidatedRecord);
                 }
                 

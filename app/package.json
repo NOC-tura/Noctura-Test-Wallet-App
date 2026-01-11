@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest watch",
-    "bootstrap:shield": "node ./scripts/bootstrapShield.mjs"
+    "bootstrap:shield": "node ./scripts/bootstrapShield.mjs",
+    "mock-relayer": "node ./scripts/mockRelayer.mjs",
+    "test:consolidation:mock": "node ./scripts/runConsolidationFlow.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.29.0",
