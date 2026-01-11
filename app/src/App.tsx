@@ -648,19 +648,22 @@ export default function App() {
           
           try {
             console.log('[UploadVerifiers] Loading verifier keys from public directory...');
-            const [depositRes, withdrawRes, transferRes] = await Promise.all([
+            const [depositRes, withdrawRes, transferRes, transferMultiRes] = await Promise.all([
               fetch('/deposit.vkey.json'),
               fetch('/withdraw.vkey.json'),
               fetch('/transfer.vkey.json'),
+              fetch('/transfer-multi.vkey.json'),
             ]);
             
-            if (!depositRes.ok || !withdrawRes.ok || !transferRes.ok) {
-              throw new Error('Failed to fetch verifier keys - make sure they are in public/ directory');
+            if (!depositRes.ok || !withdrawRes.ok || !transferRes.ok || !transferMultiRes.ok) {
+              throw new Error('Failed to fetch verifier keys - make sure they are in public/ directory (deposit, withdraw, transfer, transfer-multi)');
             }
             
             const depositVkey = await depositRes.json();
             const withdrawVkey = await withdrawRes.json();
             const transferVkey = await transferRes.json();
+            const transferMultiVkey = await transferMultiRes.json();
+            console.log('[UploadVerifiers] transfer-multi vkey loaded (for multi-note circuit), not yet uploaded on-chain.');
             
             console.log('[UploadVerifiers] Verifier keys loaded, uploading to program...');
             const { uploadVerifierKeys } = await import('./lib/shieldProgram');
