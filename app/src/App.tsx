@@ -21,6 +21,10 @@ import { planStagedSend } from './lib/notePlanner';
 import { parseNocAmount, prepareDeposit, snapshotNote, pubkeyToField, createNoteFromSecrets } from './lib/shield';
 import { submitShieldedDeposit, fetchSpentNullifiers, PRIVACY_FEE_ATOMS } from './lib/shieldProgram';
 import { buildMerkleProof } from './lib/merkle';
+import { selectNotesForAmount } from './utils/noteSelection';
+import { AmountDisplay } from './components/AmountDisplay';
+import { FeeBreakdown } from './components/FeeBreakdown';
+import { generateZKHashDisplay, generateSecureRandomness } from './utils/privacy';
 import { serializeWithdrawWitness, serializeTransferWitness } from '@zk-witness/index';
 import { serializeTransferMultiWitness } from '@zk-witness/builders/transfer-multi';
 import type { Note } from '@zk-witness/index';
@@ -127,6 +131,13 @@ function formatSolDisplay(value: number, decimals = 6): string {
   return truncated.toFixed(decimals);
 }
 
+async function computeZkHash(recipient: string, tokenType: 'NOC' | 'SOL', amount: bigint): Promise<string> {
+  const recipientPk = new PublicKey(recipient).toBytes();
+  const mint = new PublicKey(tokenType === 'SOL' ? WSOL_MINT : NOC_TOKEN_MINT).toBytes();
+  const randomness = generateSecureRandomness();
+  return generateZKHashDisplay(recipientPk, mint, amount, randomness);
+}
+
 type ShieldedTransferReview = {
   recipient: string;
   amount: number;
@@ -137,6 +148,7 @@ type ShieldedTransferReview = {
   tokenType?: 'NOC' | 'SOL';
   sharedNote?: string; // Base64 encoded note for sharing
   transparentPayout?: boolean;
+  recipientZkHash?: string;
 };
 
 // Unified transaction confirmation type
@@ -1500,33 +1512,21 @@ export default function App() {
               availableNotes: availableNotes.length,
             });
 
-            // Sort notes by amount (largest first) and select best 2 notes that can cover the amount
-            const sortedNotes = [...availableNotes].sort((a, b) => {
-              const amountA = BigInt(a.amount);
-              const amountB = BigInt(b.amount);
-              return amountA > amountB ? -1 : amountA < amountB ? 1 : 0;
-            });
-
-            // Find the best pair of 2 notes that can cover the requested amount
-            let selectedNotes: typeof availableNotes = [];
+            const MAX_NOTES = 4; // circuit input cap
             const feeAtoms = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
             const totalNeeded = atoms + feeAtoms;
-            
-            // Try to find 2 notes that together can cover the amount
-            for (let i = 0; i < sortedNotes.length - 1; i++) {
-              for (let j = i + 1; j < sortedNotes.length; j++) {
-                const total = BigInt(sortedNotes[i].amount) + BigInt(sortedNotes[j].amount);
-                if (total >= totalNeeded) {
-                  selectedNotes = [sortedNotes[i], sortedNotes[j]];
-                  break;
-                }
-              }
-              if (selectedNotes.length > 0) break;
-            }
-
-            // If no 2-note combination works, just take the 2 largest
-            if (selectedNotes.length === 0) {
-              selectedNotes = sortedNotes.slice(0, Math.min(2, sortedNotes.length));
+            let selectedNotes: typeof availableNotes = [];
+            try {
+              const selection = selectNotesForAmount(totalNeeded, availableNotes, tokenType === 'SOL' ? 'SOL' : 'NOC', MAX_NOTES);
+              selectedNotes = selection.selectedNotes;
+            } catch (err) {
+              const message = err instanceof Error ? err.message : 'Failed to select notes';
+              const totalAcrossAll = availableNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+              const couldCoverWithMore = totalAcrossAll >= totalNeeded && availableNotes.length > MAX_NOTES;
+              const suffix = couldCoverWithMore
+                ? 'Circuit currently supports up to 4 inputs; consolidate notes or reduce amount.'
+                : 'Not enough shielded balance.';
+              throw new Error(`${message}. Tried up to ${MAX_NOTES} notes to satisfy ${Number(totalNeeded) / Math.pow(10, decimals)} ${tokenType}. ${suffix}`);
             }
 
             console.log('[Transfer] Selected', selectedNotes.length, 'notes for transfer-multi');
@@ -1574,8 +1574,8 @@ export default function App() {
               console.log('[Transfer] ✓ Sufficient NOC for privacy fee');
             }
 
-            // Create merkle proofs for both input notes
-            const merkleProofsMulti = inputNotes.map(note => buildMerkleProof(availableNotes, { secret: note.secret.toString() } as any));
+            // Create Merkle proofs for each selected note
+            const merkleProofsMulti = selectedNotes.map(note => buildMerkleProof(availableNotes, note));
 
             const recipientNote = createNoteFromSecrets(recipientNoteAmount, mintKey);
             const changeNote = createNoteFromSecrets(changeAmount, mintKey);
@@ -1768,8 +1768,11 @@ export default function App() {
           
           console.log('[Transfer] Opening review modal (partial spend)');
           console.log('[Transfer] Opening review modal (partial spend)');
+          const recipientZkHash = await computeZkHash(trimmedRecipient, tokenType, atoms);
+
           setTransferReview({
             recipient: trimmedRecipient,
+            recipientZkHash,
             amount: parsedAmount,
             atoms,
             feeNoc: 0.25, // Privacy fee deducted from shielded balance (change note)
@@ -1859,6 +1862,7 @@ export default function App() {
           // But amount should reflect fee deduction if applicable
           const recipientNote = createNoteFromSecrets(recipientAmount, mintKey);
           const sharedNote = encodeSharedNote(recipientNote, mintKey, tokenType);
+          const recipientZkHash = await computeZkHash(trimmedRecipient, tokenType, recipientAmount);
           
           setPendingWithdrawalProof(proof);
           setPendingWithdrawalNote(spendNote);
@@ -1878,6 +1882,7 @@ export default function App() {
           console.log('[Transfer] Opening review modal (full spend)');
           setTransferReview({
             recipient: trimmedRecipient,
+            recipientZkHash,
             amount: Number(recipientAmount) / Math.pow(10, decimals), // Updated to show net amount after fee
             atoms: recipientAmount,
             feeNoc: 0.25, // Privacy fee applies to all shielded transfers
@@ -3177,6 +3182,7 @@ export default function App() {
     if (!transferReview) return null;
     const estimatedSolFee = 0.000005;
     const tokenSymbol = transferReview.tokenType === 'SOL' ? 'SOL' : '$NOC';
+    const nocFee = SHIELDED_PRIVACY_FEE_NOC;
     return (
       <div className="fixed inset-0 bg-black/70 backdrop-blur flex items-center justify-center px-4 z-50">
         <div className="bg-surface rounded-2xl max-w-md w-full p-6 space-y-4">
@@ -3191,11 +3197,16 @@ export default function App() {
             </div>
             <div className="flex justify-between border-b border-white/10 pb-2">
               <span className="text-neutral-400">To</span>
-              <span className="font-mono text-xs text-right">{transferReview.recipient}</span>
+              <span className="font-mono text-xs text-right break-all">{transferReview.recipientZkHash || transferReview.recipient}</span>
             </div>
-            <div className="flex justify-between border-b border-white/10 pb-2">
+            <div className="flex justify-between border-b border-white/10 pb-2 items-center">
               <span className="text-neutral-400">Amount</span>
-              <span>{transferReview.amount} {tokenSymbol}</span>
+              <AmountDisplay
+                amount={transferReview.atoms}
+                token={tokenSymbol}
+                mode="pre_sign"
+                context="shielded"
+              />
             </div>
             {transferReview.isPartialSpend && transferReview.changeAmount !== undefined && (
               <div className="flex justify-between border-b border-white/10 pb-2">
@@ -3203,13 +3214,8 @@ export default function App() {
                 <span>{transferReview.changeAmount.toFixed(4)} {tokenSymbol}</span>
               </div>
             )}
-            <div className="flex justify-between border-b border-white/10 pb-2">
-              <span className="text-neutral-400">Privacy fee</span>
-              <span>{SHIELDED_PRIVACY_FEE_NOC.toFixed(2)} $NOC</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-neutral-400">Solana network fee</span>
-              <span>{estimatedSolFee.toFixed(6)} SOL</span>
+            <div className="pt-2">
+              <FeeBreakdown nocFee={nocFee} solFee={estimatedSolFee} />
             </div>
           </div>
           <p className="text-xs text-neutral-400">
