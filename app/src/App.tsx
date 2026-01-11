@@ -16,7 +16,7 @@ import {
   estimateBaseTransactionFee,
 } from './lib/solana';
 import { ProverResponse, proveCircuit, requestNocAirdrop, relayTransfer, relayWithdraw } from './lib/prover';
-import { submitShieldedWithdrawSol } from './lib/shieldProgram';
+import { submitShieldedWithdrawSol, relayConsolidate } from './lib/shieldProgram';
 import { planStagedSend } from './lib/notePlanner';
 import { parseNocAmount, prepareDeposit, snapshotNote, pubkeyToField, createNoteFromSecrets } from './lib/shield';
 import { submitShieldedDeposit, fetchSpentNullifiers, PRIVACY_FEE_ATOMS } from './lib/shieldProgram';
@@ -27,6 +27,7 @@ import { FeeBreakdown } from './components/FeeBreakdown';
 import { generateZKHashDisplay, generateSecureRandomness } from './utils/privacy';
 import { serializeWithdrawWitness, serializeTransferWitness } from '@zk-witness/index';
 import { serializeTransferMultiWitness } from '@zk-witness/builders/transfer-multi';
+import { serializeConsolidateWitness } from '@zk-witness/builders/consolidate';
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from './types/shield';
 import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl } from './lib/constants';
@@ -34,6 +35,7 @@ import { initializePrivateRelayer, getPrivateRelayer } from './lib/privateRelaye
 import { getObfuscatedFeeCollector } from './lib/feeObfuscation';
 import { getTimingPrivacyManager } from './lib/timingPrivacy';
 import { getAccountAnonymityManager } from './lib/accountAnonymity';
+import { buildConsolidationWitness, partitionNotesForConsolidation } from './lib/consolidate';
 
 const NOC_ATOMS = 1_000_000;
 const SHIELDED_PRIVACY_FEE_NOC = 0.25; // Flat 0.25 NOC fee for ALL shielded transactions (deposits + withdrawals)
@@ -1523,13 +1525,95 @@ export default function App() {
               const selection = selectNotesForAmount(totalNeeded, availableNotes, tokenType === 'SOL' ? 'SOL' : 'NOC', MAX_NOTES);
               selectedNotes = selection.selectedNotes;
             } catch (err) {
-              const message = err instanceof Error ? err.message : 'Failed to select notes';
+              // Not enough notes in the first 4 - check if we can consolidate
               const totalAcrossAll = availableNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
               const couldCoverWithMore = totalAcrossAll >= totalNeeded && availableNotes.length > MAX_NOTES;
-              const suffix = couldCoverWithMore
-                ? 'Circuit currently supports up to 4 inputs; consolidate notes or reduce amount.'
-                : 'Not enough shielded balance.';
-              throw new Error(`${message}. Tried up to ${MAX_NOTES} notes to satisfy ${Number(totalNeeded) / Math.pow(10, decimals)} ${tokenType}. ${suffix}`);
+              
+              if (couldCoverWithMore) {
+                // Auto-consolidation: merge many notes into fewer ones
+                console.log('[Transfer] ⚡ AUTO-CONSOLIDATION TRIGGERED:', {
+                  availableNotes: availableNotes.length,
+                  needed: totalNeeded.toString(),
+                  totalAvailable: totalAcrossAll.toString(),
+                });
+                
+                setStatus(`Consolidating ${availableNotes.length} notes into 2-4 notes… (this may take 2-3 min)`);
+                
+                // Partition notes for consolidation (groups of up to 8 at a time)
+                const consolidationSteps = partitionNotesForConsolidation(availableNotes, mintKey);
+                const consolidatedNotes: ShieldedNoteRecord[] = [];
+                const walletAddress = keypair.publicKey.toBase58();
+                
+                for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {
+                  const step = consolidationSteps[stepIdx];
+                  const stepNum = stepIdx + 1;
+                  
+                  setStatus(`Consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`);
+                  console.log(`[Transfer] Consolidation step ${stepNum}: merging ${step.inputNotes.length} notes`);
+                  
+                  // Build witness
+                  const allNotesForMerkle = [
+                    ...availableNotes.filter(n => !step.inputRecords.some(r => r.nullifier === n.nullifier)),
+                    ...consolidatedNotes,
+                  ];
+                  
+                  const consolidateWitness = buildConsolidationWitness({
+                    inputRecords: step.inputRecords,
+                    outputNote: step.outputNote,
+                    allNotesForMerkle,
+                  });
+                  
+                  // Generate proof
+                  const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
+                  console.log(`[Transfer] Consolidation proof ${stepNum} generated`);
+                  
+                  // Relay consolidation
+                  setStatus(`Submitting consolidation ${stepNum}/${consolidationSteps.length}…`);
+                  const relayResult = await relayConsolidate({
+                    proof: consolidateProof,
+                    inputNullifiers: step.inputNotes.map(n => n.nullifier.toString()),
+                    outputCommitment: step.outputNote.commitment.toString(),
+                  });
+                  console.log(`[Transfer] Consolidation ${stepNum} submitted:`, relayResult.signature);
+                  
+                  // Mark input notes as spent
+                  step.inputRecords.forEach(note => markNoteSpent(note.nullifier));
+                  
+                  // Add consolidated note to our tracking
+                  const consolidatedRecord: ShieldedNoteRecord = {
+                    owner: walletAddress,
+                    commitment: step.outputNote.commitment.toString(),
+                    nullifier: step.outputNote.nullifier.toString(),
+                    secret: step.outputNote.secret.toString(),
+                    blinding: step.outputNote.blinding.toString(),
+                    rho: step.outputNote.rho.toString(),
+                    tokenMintAddress: mintKey.toBase58(),
+                    tokenMintField: step.outputNote.tokenMint.toString(),
+                    amount: step.outputNote.amount.toString(),
+                    spent: false,
+                    leafIndex: -1,
+                    createdAt: Date.now(),
+                    tokenType: tokenType as 'SOL' | 'NOC',
+                  };
+                  consolidatedNotes.push(consolidatedRecord);
+                  addShieldedNote(consolidatedRecord);
+                }
+                
+                // Now retry transfer with consolidated notes
+                console.log('[Transfer] Consolidation complete. Retrying transfer with consolidated notes.');
+                setStatus('Consolidation complete. Processing your transfer...');
+                availableNotes.length = 0;
+                availableNotes.push(...consolidatedNotes);
+                
+                const selection = selectNotesForAmount(totalNeeded, availableNotes, tokenType === 'SOL' ? 'SOL' : 'NOC', MAX_NOTES);
+                selectedNotes = selection.selectedNotes;
+              } else {
+                const message = err instanceof Error ? err.message : 'Failed to select notes';
+                const suffix = couldCoverWithMore
+                  ? 'Circuit currently supports up to 4 inputs; consolidate notes or reduce amount.'
+                  : 'Not enough shielded balance.';
+                throw new Error(`${message}. Tried up to ${MAX_NOTES} notes to satisfy ${Number(totalNeeded) / Math.pow(10, decimals)} ${tokenType}. ${suffix}`);
+              }
             }
 
             console.log('[Transfer] Selected', selectedNotes.length, 'notes for transfer-multi');

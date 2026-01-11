@@ -6,4 +6,5 @@ export * from './builders/transfer';
 export * from './builders/transfer-multi';
 export * from './builders/withdraw';
 export * from './builders/partial_withdraw';
+export * from './builders/consolidate';
 export * from './serialization';

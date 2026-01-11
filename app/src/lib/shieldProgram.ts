@@ -1115,6 +1115,42 @@ export async function relayWithdraw(params: {
   }
 }
 
+export async function relayConsolidate(params: {
+  proof: ProverResponse;
+  inputNullifiers: string[];
+  outputCommitment: string;
+}): Promise<{ signature: string }> {
+  console.log('[relayConsolidate] Submitting note consolidation via relayer...', {
+    inputCount: params.inputNullifiers.length,
+    outputCommitment: params.outputCommitment.slice(0, 16),
+  });
+  
+  try {
+    // Call relayer endpoint to submit the consolidation
+    const response = await fetch('http://localhost:8787/relay/consolidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proof: params.proof.proofBytes,
+        publicInputs: params.proof.publicInputs,
+        inputNullifiers: params.inputNullifiers,
+        outputCommitment: params.outputCommitment,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Relayer error: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    console.log('[relayConsolidate] ✅ Consolidation relayed successfully:', result.signature);
+    return result;
+  } catch (err) {
+    console.error('[relayConsolidate] ❌ Relayer call failed:', err);
+    throw err;
+  }
+}
+
 /**
  * Helper: Submit shielded transaction with privacy-aware timing.
  * Applies randomized delays and anonymity features automatically.

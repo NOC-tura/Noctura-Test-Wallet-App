@@ -4,4 +4,5 @@ export * from './merkle.js';
 export * from './builders/deposit.js';
 export * from './builders/transfer.js';
 export * from './builders/withdraw.js';
+export * from './builders/consolidate.js';
 export * from './serialization.js';

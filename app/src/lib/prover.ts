@@ -115,7 +115,7 @@ async function httpWithFailover<T>(path: string, body?: unknown, timeoutMs: numb
   throw new Error('All relayer endpoints exhausted');
 }
 
-export function proveCircuit(circuit: 'deposit' | 'transfer' | 'transfer-multi' | 'withdraw', input: unknown) {
+export function proveCircuit(circuit: 'deposit' | 'transfer' | 'transfer-multi' | 'withdraw' | 'consolidate', input: unknown) {
   console.log(`[Prover] Starting ${circuit} proof generation...`);
   console.log(`[Prover] Calling ${ProverServiceUrl}/prove/${circuit}`);
   return http<ProverResponse>(`/prove/${circuit}`, input)
