@@ -30,7 +30,7 @@ import { serializeTransferMultiWitness } from '@zk-witness/builders/transfer-mul
 import { serializeConsolidateWitness } from '@zk-witness/builders/consolidate';
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from './types/shield';
-import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl } from './lib/constants';
+import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl, RELAYER_ENDPOINTS } from './lib/constants';
 import { initializePrivateRelayer, getPrivateRelayer } from './lib/privateRelayer';
 import { getObfuscatedFeeCollector } from './lib/feeObfuscation';
 import { getTimingPrivacyManager } from './lib/timingPrivacy';
@@ -194,6 +194,29 @@ export default function App() {
   const markNoteSpent = useShieldedNotes((state) => state.markNoteSpent);
   const markMultipleSpent = useShieldedNotes((state) => state.markMultipleSpent);
   const manualLoadNotes = useShieldedNotes((state) => state.manualLoad);
+
+  // Log relayer endpoints once to debug banner state
+  useEffect(() => {
+    console.log('[RelayerDebug] RELAYER_ENDPOINTS:', RELAYER_ENDPOINTS);
+  }, []);
+
+  const isMockRelayer = useMemo(() => {
+    // If no relayer endpoints configured, show warning
+    if (!RELAYER_ENDPOINTS.length) return true;
+    // localhost:8787 is a real prover service, not a mock - don't show warning
+    return false;
+  }, []);
+
+  const mockRelayerBanner = useMemo(() => {
+    if (!isMockRelayer) return null;
+    const configured = RELAYER_ENDPOINTS.join(', ') || 'None';
+    return (
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-amber-500/15 border border-amber-400/40 text-amber-100 px-4 py-3 rounded-xl shadow-lg backdrop-blur">
+        <p className="text-sm font-semibold">Mock relayer active</p>
+        <p className="text-xs text-amber-100/80">Transactions are simulated only; funds do not move on-chain. Set VITE_RELAYER_ENDPOINTS to a real relayer. Current: {configured}</p>
+      </div>
+    );
+  }, [isMockRelayer]);
 
   // Initialize privacy systems on mount
   useEffect(() => {
@@ -1563,19 +1586,23 @@ export default function App() {
                   const step = consolidationSteps[stepIdx];
                   const stepNum = stepIdx + 1;
                   
-                  setStatus(`Consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`);
-                  console.log(`[Transfer] Consolidation step ${stepNum}: merging ${step.inputNotes.length} notes`);
-                  
-                  // Build witness using all notes in the tree for merkle proof
-                  const consolidateWitness = buildConsolidationWitness({
-                    inputRecords: step.inputRecords,
-                    outputNote: step.outputNote,
-                    allNotesForMerkle: allNotesInTree,
-                  });
-                  
-                  // Generate proof
-                  const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
-                  console.log(`[Transfer] Consolidation proof ${stepNum} generated`);
+                  try {
+                    setStatus(`Consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`);
+                    console.log(`[Transfer] Consolidation step ${stepNum}: merging ${step.inputNotes.length} notes`);
+                    
+                    // Build witness using all notes in the tree for merkle proof
+                    console.log(`[Transfer] Building consolidation witness with ${allNotesInTree.length} notes in tree`);
+                    const consolidateWitness = buildConsolidationWitness({
+                      inputRecords: step.inputRecords,
+                      outputNote: step.outputNote,
+                      allNotesForMerkle: allNotesInTree,
+                    });
+                    console.log(`[Transfer] Consolidation witness built successfully`, consolidateWitness);
+                    
+                    // Generate proof
+                    console.log(`[Transfer] Sending consolidation witness to prover...`);
+                    const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
+                    console.log(`[Transfer] Consolidation proof ${stepNum} generated`, consolidateProof);
                   
                   // Relay consolidation
                   setStatus(`Submitting consolidation ${stepNum}/${consolidationSteps.length}…`);
@@ -1608,6 +1635,10 @@ export default function App() {
                   consolidatedNotes.push(consolidatedRecord);
                   allNotesInTree.push(consolidatedRecord);
                   addShieldedNote(consolidatedRecord);
+                  } catch (consolidateError) {
+                    console.error(`[Transfer] Consolidation step ${stepNum} failed:`, consolidateError);
+                    throw new Error(`Consolidation failed: ${consolidateError instanceof Error ? consolidateError.message : String(consolidateError)}`);
+                  }
                 }
                 
                 // Now retry transfer with consolidated notes
@@ -1771,9 +1802,12 @@ export default function App() {
         // Check fee headroom for NOC transparent payout: amount + 0.25 NOC must fit in the note
         if (tokenType === 'NOC' && transparentPayout) {
           const feeAtoms = PRIVACY_FEE_ATOMS;
-          if (noteAmount <= atoms + feeAtoms) {
-            const minNeeded = Number(atoms + feeAtoms) / Math.pow(10, decimals);
-            throw new Error(`Need at least ${minNeeded.toFixed(decimals === 9 ? 9 : 6)} ${tokenType} in the selected note to cover amount plus 0.25 NOC fee. Use a slightly smaller amount or a larger/consolidated note.`);
+          if (noteAmount < atoms + feeAtoms) {
+            const shieldedBalance = Number(noteAmount) / Math.pow(10, decimals);
+            const requestedAmount = Number(atoms) / Math.pow(10, decimals);
+            const feeAmount = Number(feeAtoms) / Math.pow(10, decimals);
+            const maxWithdrawable = shieldedBalance - feeAmount;
+            throw new Error(`Insufficient balance for fee. You have ${shieldedBalance.toFixed(decimals === 9 ? 9 : 6)} ${tokenType} shielded, trying to withdraw ${requestedAmount.toFixed(decimals === 9 ? 9 : 6)} ${tokenType}, but need ${feeAmount.toFixed(decimals === 9 ? 9 : 6)} ${tokenType} for privacy fee. Maximum withdrawable: ${maxWithdrawable.toFixed(decimals === 9 ? 9 : 6)} ${tokenType}.`);
           }
         }
 
@@ -3772,6 +3806,7 @@ export default function App() {
   if (!hasWallet || forceShowOnboarding) {
     return (
       <>
+        {mockRelayerBanner}
         {renderOnboarding()}
         {mnemonicModal}
         {shieldedConfirmModal}
@@ -3783,6 +3818,7 @@ export default function App() {
 
   return (
     <>
+      {mockRelayerBanner}
       <Dashboard
         mode={mode}
         solBalance={solBalance}

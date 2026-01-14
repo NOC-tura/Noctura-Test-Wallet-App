@@ -242,6 +242,10 @@ export async function relayWithdraw(
   console.log('[Relayer] Relayer pubkey:', relayerKeypair.publicKey.toBase58());
 
   if (collectFee && feeCollector) {
+    // PRE-FLIGHT CHECKS: Verify all recipient accounts exist BEFORE withdrawing from vault
+    console.log('[Relayer] Pre-flight: Checking recipient ATA...');
+    const recipientAtaInfo = await connection.getAccountInfo(targetAta);
+    
     // Withdraw to relayer first, then split between recipient and fee collector
     const relayerAta = splToken.getAssociatedTokenAddressSync(
       mint,
@@ -309,6 +313,19 @@ export async function relayWithdraw(
     const feeCollectorAtaInfo = await connection.getAccountInfo(feeCollectorAta);
     const splitTx = new Transaction();
     
+    // Create recipient ATA if it doesn't exist (CRITICAL: do this in same transaction as transfer)
+    if (!recipientAtaInfo) {
+      console.log('[Relayer] Adding recipient ATA creation to split transaction');
+      splitTx.add(splToken.createAssociatedTokenAccountInstruction(
+        relayerKeypair.publicKey,
+        targetAta,
+        recipientPubkey,
+        mint,
+        spl.TOKEN_PROGRAM_ID,
+        spl.ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
+    }
+    
     if (!feeCollectorAtaInfo) {
       console.log('[Relayer] Creating fee collector ATA...');
       splitTx.add(splToken.createAssociatedTokenAccountInstruction(
@@ -337,10 +354,22 @@ export async function relayWithdraw(
     return withdrawSig; // Return the main withdrawal signature
   } else {
     // No fee collection - withdraw directly to recipient
-    // Check if target ATA exists
+    // Check if target ATA exists, create if needed
     const ataInfo = await connection.getAccountInfo(targetAta);
+    const withdrawTx = new Transaction();
+    
     if (!ataInfo) {
-      throw new Error('Recipient ATA does not exist. Please ensure the recipient has a token account.');
+      console.log('[Relayer] Recipient ATA does not exist, creating it:', targetAta.toBase58());
+      // Create the associated token account for the recipient
+      const createAtaIx = spl.createAssociatedTokenAccountInstruction(
+        relayerKeypair.publicKey, // payer
+        targetAta, // ata address
+        recipientPubkey, // owner
+        mint, // mint
+        spl.TOKEN_PROGRAM_ID,
+        spl.ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      withdrawTx.add(createAtaIx);
     }
 
     const withdrawIx = await program.methods
@@ -357,8 +386,8 @@ export async function relayWithdraw(
       })
       .instruction();
 
-    const withdrawTx = new Transaction().add(withdrawIx);
-    const signature = await sendAndConfirmTx(connection, withdrawTx, [relayerKeypair], 'Withdrawal');
+    withdrawTx.add(withdrawIx);
+    const signature = await sendAndConfirmTx(connection, withdrawTx, [relayerKeypair], 'Withdrawal (with ATA creation if needed)');
     return signature;
   }
 }

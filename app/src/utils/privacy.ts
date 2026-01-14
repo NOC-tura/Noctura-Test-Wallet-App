@@ -1,15 +1,4 @@
-import { buildPoseidon } from 'circomlibjs';
 import { generateSecureRandomBytes } from './crypto';
-
-type Poseidon = Awaited<ReturnType<typeof buildPoseidon>>;
-let poseidonInstance: Promise<Poseidon> | null = null;
-
-async function getPoseidon(): Promise<Poseidon> {
-  if (!poseidonInstance) {
-    poseidonInstance = buildPoseidon();
-  }
-  return poseidonInstance;
-}
 
 function bytesToBigInt(bytes: Uint8Array): bigint {
   let hex = '';
@@ -29,7 +18,7 @@ function formatZkHash(hex: string): string {
 
 /**
  * Generate privacy-preserving ZK-Hash for address display.
- * Domain-separated Poseidon hash over recipientPubkey || tokenMint || amount || randomness.
+ * Uses a simple hash combination for UI purposes.
  */
 export async function generateZKHashDisplay(
   recipientPubkey: Uint8Array,
@@ -37,12 +26,22 @@ export async function generateZKHashDisplay(
   amount: bigint,
   randomness: Uint8Array,
 ): Promise<string> {
-  const poseidon = await getPoseidon();
-  const domain = 1n; // simple domain separation tag
-  const hash = poseidon([domain, bytesToBigInt(recipientPubkey), bytesToBigInt(tokenMint), amount, bytesToBigInt(randomness)]);
-  const hashBig = poseidon.F.toObject(hash) as bigint;
-  const hex = hashBig.toString(16);
-  return formatZkHash(hex);
+  // Simple hash for display purposes - combine all inputs
+  const combined = new Uint8Array([
+    ...recipientPubkey.slice(0, 16),
+    ...tokenMint.slice(0, 16),
+    ...new Uint8Array(new BigUint64Array([BigInt(amount) & 0xFFFFFFFFFFFFFFFFn]).buffer),
+    ...randomness.slice(0, 16),
+  ]);
+  
+  // Use Web Crypto API for hashing
+  const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
+  const hashArray = new Uint8Array(hashBuffer);
+  const hashHex = Array.from(hashArray)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  return formatZkHash(hashHex);
 }
 
 /**

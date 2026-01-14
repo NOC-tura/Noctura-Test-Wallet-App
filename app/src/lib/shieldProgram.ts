@@ -332,37 +332,72 @@ export async function submitShieldedDeposit(params: {
       isNativeSOL,
     });
 
-    // For native SOL, collect the privacy fee first, then transfer SOL to the vault
+    // For native SOL, collect the privacy fee AND transfer SOL in a SINGLE transaction
     if (isNativeSOL) {
       console.log('[submitShieldedDeposit] Processing native SOL deposit...');
 
-      // Collect 0.25 NOC privacy fee for SOL deposits as well
-      console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee (SOL)...');
-      try {
-        const feeSig = await collectPrivacyFee(keypair);
-        console.log('[submitShieldedDeposit] ✅ Privacy fee collected (SOL), signature:', feeSig);
-      } catch (feeErr) {
-        console.error('[submitShieldedDeposit] ❌ Privacy fee collection failed (SOL):', feeErr);
-        throw new Error(`Privacy fee collection failed: ${(feeErr as Error).message}`);
-      }
+      // Get NOC token accounts for privacy fee
+      const nocMint = new PublicKey(NOC_TOKEN_MINT);
+      const userNocAccount = getAssociatedTokenAddressSync(
+        nocMint,
+        keypair.publicKey,
+        false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+
+      // Get fee collector's NOC account
+      const program = getProgramForKeypair(keypair);
+      const [globalState] = PublicKey.findProgramAddressSync(
+        [Buffer.from('global-state')],
+        program.programId
+      );
+      const globalStateAccount = await program.account.globalState.fetch(globalState);
+      const feeCollectorOwner = new PublicKey(
+        (globalStateAccount as { feeCollector: PublicKey | string }).feeCollector,
+      );
+      const feeCollectorNocAccount = getAssociatedTokenAddressSync(
+        nocMint,
+        feeCollectorOwner,
+        true,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
 
       // The vault for SOL is a system account (PDA), not a token account
-      const program = getProgramForKeypair(keypair);
       const [solVaultPda] = PublicKey.findProgramAddressSync(
         [Buffer.from('sol-vault')],
         program.programId
       );
       console.log('[submitShieldedDeposit] SOL vault PDA:', solVaultPda.toBase58());
 
-      // Transfer native SOL to the vault
-      const transferIx = SystemProgram.transfer({
-        fromPubkey: keypair.publicKey,
-        toPubkey: solVaultPda,
-        lamports: Number(prepared.note.amount),
-      });
-      const tx = new Transaction().add(transferIx);
+      // Combine privacy fee + SOL transfer in ONE transaction
+      console.log('[submitShieldedDeposit] Creating combined transaction: privacy fee + SOL transfer');
+      const tx = new Transaction();
+      
+      // Instruction 1: Transfer 0.25 NOC privacy fee
+      tx.add(
+        createTransferInstruction(
+          userNocAccount,
+          feeCollectorNocAccount,
+          keypair.publicKey,
+          Number(PRIVACY_FEE_ATOMS),
+          [],
+          TOKEN_PROGRAM_ID,
+        )
+      );
+      
+      // Instruction 2: Transfer SOL to vault
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: solVaultPda,
+          lamports: Number(prepared.note.amount),
+        })
+      );
+
       solDepositSig = await sendAndConfirmTransaction(connection, tx, [keypair]);
-      console.log('[submitShieldedDeposit] ✅ Native SOL transferred to vault:', solDepositSig);
+      console.log('[submitShieldedDeposit] ✅ Combined transaction confirmed (privacy fee + SOL deposit):', solDepositSig);
       // Wait for confirmation
       await new Promise(resolve => setTimeout(resolve, 1000));
     }

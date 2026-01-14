@@ -19,8 +19,10 @@ export const INITIAL_AIRDROP_AMOUNT = 10_000;
 
 // Relayer endpoints for failover (comma-separated; parsed from env or config)
 export const RELAYER_ENDPOINTS = (() => {
-  const env = readEnv('VITE_RELAYER_ENDPOINTS', ProverServiceUrl);
-  return env.split(',').map(url => url.trim()).filter(Boolean);
+  const env = readEnv('VITE_RELAYER_ENDPOINTS', '');
+  // Fallback to localhost:8787 if not set
+  const endpoints = env || 'http://localhost:8787';
+  return endpoints.split(',').map(url => url.trim()).filter(Boolean);
 })();
 
 // Health check interval and timeout

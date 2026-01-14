@@ -4,7 +4,8 @@ import path from 'node:path';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
+  const envDir = path.resolve(__dirname);
+  const env = loadEnv(mode, envDir, '');
   // For development, use devnet directly (CORS is handled by browser for same-origin)
   // The Solana web3.js library handles CORS properly
   const explicitRpc = env.VITE_SOLANA_RPC_URL?.trim();
@@ -81,6 +82,7 @@ export default defineConfig(({ mode }) => {
       'process.env': {},
       __HELIUS_URL__: JSON.stringify(resolvedRpc),
       __PROVER_URL__: JSON.stringify(env.VITE_PROVER_URL || 'http://localhost:8787'),
+      'import.meta.env.VITE_RELAYER_ENDPOINTS': JSON.stringify(env.VITE_RELAYER_ENDPOINTS || env.VITE_PROVER_URL || 'http://localhost:8787'),
     },
     test: {
       environment: 'jsdom',
