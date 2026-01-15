@@ -142,6 +142,7 @@ export function relayWithdraw(params: {
   proof: ProverResponse;
   amount: string;
   nullifier: string;
+  recipient: string;
   recipientAta: string;
   mint?: string;
   collectFee?: boolean;
@@ -154,6 +155,7 @@ export function relayWithdraw(params: {
     },
     amount: params.amount,
     nullifier: params.nullifier,
+    recipient: params.recipient,
     recipientAta: params.recipientAta,
     mint: params.mint,
     collectFee: params.collectFee,
@@ -166,14 +168,19 @@ export function relayWithdraw(params: {
 /**
  * Submit a shielded transfer (note split) via the relayer service with automatic failover.
  * This preserves privacy - the relayer signs the transaction, not the user.
+ * @param encryptedNote Optional encrypted note data to include as memo for automatic discovery
  */
 export function relayTransfer(params: {
   proof: ProverResponse;
   nullifier: string;
   outputCommitment1: string;
   outputCommitment2: string;
+  encryptedNote?: string; // Encrypted note payload for recipient to discover
 }) {
   console.log('[Relayer] Submitting transfer via relayer (with failover)...');
+  if (params.encryptedNote) {
+    console.log('[Relayer] Including encrypted note for automatic discovery');
+  }
   return httpWithFailover<RelayResponse>('/relay/transfer', {
     proof: {
       proofBytes: params.proof.proofBytes,
@@ -182,6 +189,7 @@ export function relayTransfer(params: {
     nullifier: params.nullifier,
     outputCommitment1: params.outputCommitment1,
     outputCommitment2: params.outputCommitment2,
+    encryptedNote: params.encryptedNote,
   }, RELAY_TIMEOUT_MS).then(result => {
     console.log('[Relayer] Transfer relayed successfully:', result.signature);
     return result;

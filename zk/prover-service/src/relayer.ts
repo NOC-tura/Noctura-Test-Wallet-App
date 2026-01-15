@@ -1,4 +1,4 @@
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import * as anchor from '@coral-xyz/anchor';
 import { Program } from '@coral-xyz/anchor';
 import * as spl from '@solana/spl-token';
@@ -11,6 +11,8 @@ const splToken = spl as Record<string, any>;
 // Program ID for Noctura Shield
 const PROGRAM_ID = new PublicKey('3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz');
 const NOC_MINT = new PublicKey('EvPfUBA97CWnKP6apRqmJYSzudonTCZCzH5tQZ7fk649');
+// WSOL mint (native SOL wrapped) - used to identify SOL withdrawals
+const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 
 // Privacy fee: 0.25 NOC for relayed shielded transactions
 const PRIVACY_FEE_ATOMS = 250_000n;
@@ -160,6 +162,15 @@ function deriveShieldPdas(mint: PublicKey = NOC_MINT) {
   };
 }
 
+// Derive SOL vault PDA (separate from token vaults)
+function deriveSolVault(): PublicKey {
+  const [solVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from('sol-vault')],
+    PROGRAM_ID
+  );
+  return solVault;
+}
+
 export interface RelayWithdrawParams {
   proof: {
     proofBytes: string;
@@ -167,6 +178,7 @@ export interface RelayWithdrawParams {
   };
   amount: string; // bigint as string - recipient amount (fee is added automatically if collectFee=true)
   nullifier: string; // bigint as string
+  recipient: string; // Recipient's main pubkey as string (owner of the ATA)
   recipientAta: string; // PublicKey as string
   mint?: string; // Optional mint, defaults to NOC
   collectFee?: boolean; // If true, adds 0.25 NOC fee and sends to fee collector
@@ -180,6 +192,14 @@ export interface RelayTransferParams {
   nullifier: string;
   outputCommitment1: string;
   outputCommitment2: string;
+  encryptedNote?: string; // Encrypted note payload for recipient to discover automatically
+}
+
+export interface RelayConsolidateParams {
+  proof: string; // base64 proof bytes
+  publicInputs: string[]; // base64 public inputs
+  inputNullifiers: string[]; // bigint as string array
+  outputCommitment: string; // bigint as string
 }
 
 /**
@@ -203,10 +223,20 @@ export async function relayWithdraw(
     throw new Error('IDL not loaded - cannot relay transactions');
   }
 
-  const { proof, amount, nullifier, recipientAta, mint: mintStr, collectFee } = params;
+  const { proof, amount, nullifier, recipient, recipientAta, mint: mintStr, collectFee } = params;
   const mint = mintStr ? new PublicKey(mintStr) : NOC_MINT;
+  
+  // Check if this is a native SOL withdrawal (WSOL mint)
+  const isNativeSOL = mint.equals(WSOL_MINT);
+  
+  if (isNativeSOL) {
+    console.log('[Relayer] Detected native SOL withdrawal');
+    return relayWithdrawSol(connection, relayerKeypair, params, feeCollector);
+  }
+  
   const pdas = deriveShieldPdas(mint);
   const targetAta = new PublicKey(recipientAta);
+  const recipientPubkey = new PublicKey(recipient);
   
   // Parse amounts
   const recipientAmount = BigInt(amount);
@@ -361,7 +391,7 @@ export async function relayWithdraw(
     if (!ataInfo) {
       console.log('[Relayer] Recipient ATA does not exist, creating it:', targetAta.toBase58());
       // Create the associated token account for the recipient
-      const createAtaIx = spl.createAssociatedTokenAccountInstruction(
+      const createAtaIx = splToken.createAssociatedTokenAccountInstruction(
         relayerKeypair.publicKey, // payer
         targetAta, // ata address
         recipientPubkey, // owner
@@ -393,8 +423,84 @@ export async function relayWithdraw(
 }
 
 /**
+ * Submit a native SOL withdrawal via the relayer.
+ * Native SOL uses a separate vault (sol-vault PDA) and SystemProgram transfers.
+ * The fee is collected separately in NOC tokens.
+ */
+async function relayWithdrawSol(
+  connection: Connection,
+  relayerKeypair: Keypair,
+  params: RelayWithdrawParams,
+  feeCollector?: string
+): Promise<string> {
+  const IDL = getIDL();
+  if (!IDL) {
+    throw new Error('IDL not loaded - cannot relay SOL transactions');
+  }
+
+  const { proof, amount, nullifier, recipient } = params;
+  const recipientPubkey = new PublicKey(recipient);
+  
+  // Parse amount (in lamports)
+  const recipientAmount = BigInt(amount);
+  const amountBn = new BN(recipientAmount.toString());
+
+  // Create Anchor provider with relayer as the wallet
+  const wallet = {
+    publicKey: relayerKeypair.publicKey,
+    signTransaction: async (tx: Transaction) => {
+      tx.sign(relayerKeypair);
+      return tx;
+    },
+    signAllTransactions: async (txs: Transaction[]) => {
+      txs.forEach(tx => tx.sign(relayerKeypair));
+      return txs;
+    },
+  };
+  
+  const provider = new anchor.AnchorProvider(connection, wallet as any, {
+    commitment: 'confirmed',
+  });
+  const program = new Program(IDL, PROGRAM_ID, provider);
+
+  const proofBytes = base64ToBytes(proof.proofBytes);
+  const publicInputs = proof.publicInputs.map((entry) => Array.from(base64ToBytes(entry)) as [number, ...number[]]);
+  const nullifierBytes = bigIntToBytesLE(BigInt(nullifier));
+
+  // Derive PDAs for SOL withdrawal
+  const pdas = deriveShieldPdas(NOC_MINT); // Use NOC for common PDAs
+  const solVault = deriveSolVault();
+
+  console.log('[Relayer] Submitting native SOL withdrawal...');
+  console.log('[Relayer] SOL amount (lamports):', amount);
+  console.log('[Relayer] Recipient:', recipientPubkey.toBase58());
+  console.log('[Relayer] SOL Vault:', solVault.toBase58());
+  console.log('[Relayer] Relayer pubkey:', relayerKeypair.publicKey.toBase58());
+
+  // Build the withdrawal instruction for native SOL using transparentWithdrawSol
+  const withdrawIx = await program.methods
+    .transparentWithdrawSol(amountBn, Buffer.from(proofBytes), publicInputs, nullifierBytes)
+    .accounts({
+      globalState: pdas.globalState,
+      nullifierSet: pdas.nullifierSet,
+      withdrawVerifier: pdas.withdrawVerifier,
+      solVault: solVault,
+      recipient: recipientPubkey,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const withdrawTx = new Transaction().add(withdrawIx);
+  const signature = await sendAndConfirmTx(connection, withdrawTx, [relayerKeypair], 'Native SOL withdrawal');
+  
+  console.log('[Relayer] Native SOL withdrawal confirmed:', signature);
+  return signature;
+}
+
+/**
  * Submit a shielded transfer (note split) via the relayer.
  * Used for partial spends where we need to split a note.
+ * If encryptedNote is provided, it's added as a memo for the recipient to discover.
  */
 export async function relayTransfer(
   connection: Connection,
@@ -406,7 +512,7 @@ export async function relayTransfer(
     throw new Error('IDL not loaded - cannot relay transactions');
   }
 
-  const { proof, nullifier, outputCommitment1, outputCommitment2 } = params;
+  const { proof, nullifier, outputCommitment1, outputCommitment2, encryptedNote } = params;
   const pdas = deriveShieldPdas();
 
   // Create Anchor provider with relayer as the wallet
@@ -455,6 +561,19 @@ export async function relayTransfer(
     .instruction();
 
   const tx = new Transaction().add(ix);
+  
+  // Add encrypted note as memo for automatic discovery by recipient
+  if (encryptedNote) {
+    const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+    const memoIx = new TransactionInstruction({
+      keys: [],
+      programId: MEMO_PROGRAM_ID,
+      data: Buffer.from(`noctura:${encryptedNote}`, 'utf-8'),
+    });
+    tx.add(memoIx);
+    console.log('[Relayer] Added encrypted note memo for automatic discovery');
+  }
+  
   tx.feePayer = relayerKeypair.publicKey;
   const latestBlockhash = await getBlockhashWithRetry(connection);
   tx.recentBlockhash = latestBlockhash.blockhash;
@@ -490,6 +609,107 @@ export async function relayTransfer(
   // Return immediately - don't wait for confirmation
   // The simulation already passed, so the tx should land
   // Client can verify by checking the nullifier is spent
+  console.log('[Relayer] Returning signature (optimistic)');
+  return signature;
+}
+
+/**
+ * Submit a consolidation (merge multiple notes into one) via the relayer.
+ * Uses the shieldedTransfer instruction with multiple input nullifiers.
+ */
+export async function relayConsolidate(
+  connection: Connection,
+  relayerKeypair: Keypair,
+  params: RelayConsolidateParams
+): Promise<string> {
+  const IDL = getIDL();
+  if (!IDL) {
+    throw new Error('IDL not loaded - cannot relay transactions');
+  }
+
+  const { proof, publicInputs, inputNullifiers, outputCommitment } = params;
+  const pdas = deriveShieldPdas();
+
+  // Create Anchor provider with relayer as the wallet
+  const wallet = {
+    publicKey: relayerKeypair.publicKey,
+    signTransaction: async (tx: Transaction) => {
+      tx.sign(relayerKeypair);
+      return tx;
+    },
+    signAllTransactions: async (txs: Transaction[]) => {
+      txs.forEach(tx => tx.sign(relayerKeypair));
+      return txs;
+    },
+  };
+  
+  const provider = new anchor.AnchorProvider(connection, wallet as any, {
+    commitment: 'confirmed',
+  });
+  const program = new Program(IDL, PROGRAM_ID, provider);
+
+  const proofBytes = base64ToBytes(proof);
+  const publicInputsArr = publicInputs.map((entry) => Array.from(base64ToBytes(entry)) as [number, ...number[]]);
+  
+  // Convert all input nullifiers to bytes
+  const nullifierBytesArr = inputNullifiers.map(n => bigIntToBytesLE(BigInt(n)));
+  
+  // Single output commitment for consolidation
+  const outputCommitmentBytes = bigIntToBytesLE(BigInt(outputCommitment));
+
+  console.log('[Relayer] Submitting consolidation...');
+  console.log('[Relayer] Input nullifiers:', inputNullifiers.length);
+  console.log('[Relayer] Output commitment:', outputCommitment.slice(0, 20) + '...');
+  console.log('[Relayer] Proof bytes length:', proofBytes.length);
+  console.log('[Relayer] Public inputs count:', publicInputsArr.length);
+
+  // Build transaction - consolidation uses shieldedTransfer with multiple inputs, 1 output
+  const ix = await program.methods
+    .shieldedTransfer(
+      nullifierBytesArr,
+      [outputCommitmentBytes], // Single output for consolidation
+      Buffer.from(proofBytes),
+      publicInputsArr
+    )
+    .accounts({
+      merkleTree: pdas.merkleTree,
+      nullifierSet: pdas.nullifierSet,
+      transferVerifier: pdas.transferVerifier,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(ix);
+  tx.feePayer = relayerKeypair.publicKey;
+  const latestBlockhash = await getBlockhashWithRetry(connection);
+  tx.recentBlockhash = latestBlockhash.blockhash;
+  tx.sign(relayerKeypair);
+
+  // Simulate first
+  console.log('[Relayer] Simulating consolidation transaction...');
+  try {
+    const simulation = await connection.simulateTransaction(tx);
+    if (simulation.value.err) {
+      console.error('[Relayer] Consolidation simulation failed:', simulation.value.err);
+      console.error('[Relayer] Simulation logs:', simulation.value.logs);
+      throw new Error(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}\nLogs: ${simulation.value.logs?.join('\n')}`);
+    }
+    console.log('[Relayer] Simulation succeeded, logs:', simulation.value.logs?.slice(-3));
+  } catch (simErr: any) {
+    if (simErr.message?.includes('blockhash')) {
+      console.warn('[Relayer] Simulation blockhash issue, proceeding without simulation');
+    } else {
+      console.error('[Relayer] Simulation error:', simErr);
+      throw simErr;
+    }
+  }
+
+  // Send transaction
+  const signature = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: true,
+    maxRetries: 5,
+  });
+  console.log('[Relayer] Consolidation sent:', signature);
+
   console.log('[Relayer] Returning signature (optimistic)');
   return signature;
 }

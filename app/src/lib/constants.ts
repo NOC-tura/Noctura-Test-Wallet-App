@@ -8,10 +8,19 @@ function readEnv(key: string, fallback = ''): string {
 
 // Devnet NOC mint (2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb)
 export const NOC_TOKEN_MINT = '2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb';
-// Native SOL mint address (used for shielding native SOL)
+
+// Wrapped SOL mint - used ONLY for Solana SPL Token operations (ATAs)
+// NOT used in ZK circuits - those use simple constant 1n for SOL
 export const WSOL_MINT = 'So11111111111111111111111111111111111111112';
-// Native SOL system program ID (for direct SOL deposits without wrapping)
-export const NATIVE_SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+// ZK Circuit Token Identifiers
+// These are used ONLY in the ZK circuit's tokenMint field to distinguish SOL from NOC notes.
+// The actual transactions use native SOL (no wrapping needed).
+// SOL uses a simple constant (1n) for its ZK tokenMint field.
+// NOC uses the poseidon hash of its mint address.
+export const SOL_ZK_TOKEN_ID = '1'; // Simple constant for SOL in ZK circuits
+export const NOC_ZK_TOKEN_ID = NOC_TOKEN_MINT; // NOC mint address (will be hashed)
+
 export const SHIELD_PROGRAM_ID = readEnv('VITE_SHIELD_PROGRAM', '3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz');
 export const HeliusRpcUrl = (globalThis as any).__HELIUS_URL__ as string;
 export const ProverServiceUrl = (globalThis as any).__PROVER_URL__ as string;
@@ -24,6 +33,9 @@ export const RELAYER_ENDPOINTS = (() => {
   const endpoints = env || 'http://localhost:8787';
   return endpoints.split(',').map(url => url.trim()).filter(Boolean);
 })();
+
+// Solana RPC endpoint
+export const SOLANA_RPC = readEnv('VITE_SOLANA_RPC', 'https://api.devnet.solana.com');
 
 // Health check interval and timeout
 export const RELAYER_HEALTH_CHECK_INTERVAL_MS = 30_000; // 30 seconds

@@ -11,6 +11,7 @@ interface DashboardProps {
   shieldedSolBalance: number;
   shieldedNocBalance: number;
   walletAddress: string;
+  shieldedAddress?: string; // New: noctura1... format for private transfers
   onModeChange: (mode: 'transparent' | 'shielded') => void;
   onReceive: () => void;
   onSend: () => void;
@@ -28,6 +29,7 @@ export function Dashboard({
   shieldedSolBalance,
   shieldedNocBalance,
   walletAddress,
+  shieldedAddress,
   onModeChange,
   onReceive,
   onSend,
@@ -45,12 +47,16 @@ export function Dashboard({
   const [transactions, setTransactions] = useState<Array<{ signature: string; slot: number; timestamp: number; err: any; memo?: string }>>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
+  const [copiedShieldedAddress, setCopiedShieldedAddress] = useState(false);
   const [sendToken, setSendToken] = useState<'SOL' | 'NOC'>('SOL');
   const [sendAmount, setSendAmount] = useState('');
   const [sendRecipient, setSendRecipient] = useState('');
   const [shieldToken, setShieldToken] = useState<'SOL' | 'NOC'>('SOL');
   const [shieldAmount, setShieldAmount] = useState('');
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+  const qrShieldedCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const isTransparent = mode === 'transparent';
 
   // Generate QR code when modal opens or address changes
   useEffect(() => {
@@ -70,9 +76,22 @@ export function Dashboard({
         console.error('QR code generation error:', err);
       });
     }
-  }, [showReceiveModal, walletAddress]);
-
-  const isTransparent = mode === 'transparent';
+    
+    // Generate QR for shielded address in shielded mode
+    if (showReceiveModal && qrShieldedCanvasRef.current && shieldedAddress && !isTransparent) {
+      QRCode.toCanvas(qrShieldedCanvasRef.current, shieldedAddress, {
+        width: 200,
+        color: {
+          dark: '#8b5cf6',
+          light: '#0a0e27',
+        },
+        margin: 1,
+        errorCorrectionLevel: 'H',
+      }).catch((err: unknown) => {
+        console.error('Shielded QR code generation error:', err);
+      });
+    }
+  }, [showReceiveModal, walletAddress, shieldedAddress, isTransparent]);
   
   // Theme colors based on mode
   const themeColor = isTransparent ? '#00f0ff' : '#8b5cf6'; // cyan for transparent, purple for shielded
@@ -90,10 +109,10 @@ export function Dashboard({
   }, [walletAddress]);
 
   const handleReceiveClick = useCallback(() => {
-    if (!isTransparent) return;
+    // Allow receiving in both transparent and shielded mode
     setShowReceiveModal(true);
     onReceive();
-  }, [isTransparent, onReceive]);
+  }, [onReceive]);
 
   const handleSendClick = useCallback(() => {
     setShowSendModal(true);
@@ -223,10 +242,9 @@ export function Dashboard({
                   {/* Action Buttons */}
                   <div className="action-buttons">
                     <button
-                      className={`action-btn ${!isTransparent ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className="action-btn"
                       onClick={handleReceiveClick}
-                      disabled={!isTransparent}
-                      title={isTransparent ? 'Receive funds' : 'Only available in Transparent mode'}
+                      title={isTransparent ? 'Receive funds to wallet' : 'Receive private funds to shielded address'}
                       style={{
                         borderColor: `${themeColor}4D`,
                         color: themeColor,
@@ -370,15 +388,18 @@ export function Dashboard({
               </button>
             </div>
 
+            {/* Transparent Address */}
             <div className="input-field">
-              <label className="input-label">Your Wallet Address</label>
+              <label className="input-label" style={{ color: '#00f0ff' }}>
+                🔓 Transparent Address (Public)
+              </label>
               <div className="input-wrapper">
                 <input
                   type="text"
                   className="input-box"
                   value={walletAddress}
                   readOnly
-                  style={{ paddingRight: '80px' }}
+                  style={{ paddingRight: '80px', borderColor: '#00f0ff33' }}
                 />
                 <button
                   className="copy-btn"
@@ -387,24 +408,79 @@ export function Dashboard({
                   {copiedAddress ? '✓ Copied' : 'Copy'}
                 </button>
               </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Standard Solana address. Transactions are visible on blockchain.
+              </p>
             </div>
 
-            <div className="qr-container" style={{ display: 'flex', justifyContent: 'center', margin: '20px 0' }}>
+            {/* QR for transparent address */}
+            <div className="qr-container" style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
               <canvas
                 ref={qrCanvasRef}
                 style={{
-                  width: 200,
-                  height: 200,
+                  width: 160,
+                  height: 160,
                   borderRadius: '12px',
                   border: '2px solid #00f0ff',
-                  padding: '10px',
+                  padding: '8px',
                   backgroundColor: '#0a0e27',
                 }}
               />
             </div>
 
-            <p className="text-center text-sm text-gray-400 mt-6">
-              Share this address or QR code to receive funds
+            {/* Shielded Address - only show in shielded mode */}
+            {!isTransparent && shieldedAddress && (
+              <>
+                <div className="input-field" style={{ marginTop: '20px' }}>
+                  <label className="input-label" style={{ color: '#8b5cf6' }}>
+                    🛡️ Shielded Address (Private)
+                  </label>
+                  <div className="input-wrapper">
+                    <input
+                      type="text"
+                      className="input-box"
+                      value={shieldedAddress}
+                      readOnly
+                      style={{ paddingRight: '80px', borderColor: '#8b5cf633', fontSize: '12px' }}
+                    />
+                    <button
+                      className="copy-btn"
+                      onClick={() => {
+                        navigator.clipboard.writeText(shieldedAddress);
+                        setCopiedShieldedAddress(true);
+                        setTimeout(() => setCopiedShieldedAddress(false), 2000);
+                      }}
+                      style={{ backgroundColor: '#8b5cf622', borderColor: '#8b5cf6' }}
+                    >
+                      {copiedShieldedAddress ? '✓ Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    ✨ Private address. Senders encrypt notes - you auto-discover payments!
+                  </p>
+                </div>
+
+                {/* QR for shielded address */}
+                <div className="qr-container" style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
+                  <canvas
+                    ref={qrShieldedCanvasRef}
+                    style={{
+                      width: 160,
+                      height: 160,
+                      borderRadius: '12px',
+                      border: '2px solid #8b5cf6',
+                      padding: '8px',
+                      backgroundColor: '#0a0e27',
+                    }}
+                  />
+                </div>
+              </>
+            )}
+
+            <p className="text-center text-sm text-gray-400 mt-4">
+              {isTransparent 
+                ? 'Share this address or QR code to receive funds' 
+                : 'Share shielded address for private transfers, or transparent for public'}
             </p>
           </div>
         </div>

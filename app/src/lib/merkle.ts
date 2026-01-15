@@ -18,7 +18,17 @@ export function buildMerkleProof(notes: ShieldedNoteRecord[], target: ShieldedNo
   console.log('[Merkle] Total notes:', notes.length);
   
   const tree = new IncrementalMerkleTree();
-  const ordered = [...notes].sort((a, b) => a.leafIndex - b.leafIndex);
+  
+  // CRITICAL: Sort by leafIndex, then by commitment for stability
+  // This ensures consistent ordering even when leafIndex values collide
+  const ordered = [...notes].sort((a, b) => {
+    if (a.leafIndex !== b.leafIndex) {
+      return a.leafIndex - b.leafIndex;
+    }
+    // Secondary sort by commitment for deterministic ordering
+    return a.commitment.localeCompare(b.commitment);
+  });
+  
   console.log('[Merkle] Ordered notes by leafIndex:', ordered.map(n => n.leafIndex));
   
   // Find the index of the target note in our local ordered list

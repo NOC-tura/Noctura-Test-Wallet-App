@@ -89,11 +89,51 @@ export const useShieldedNotes = create<ShieldedState>()(
           return newState;
         }),
       markNoteSpent: (nullifier) =>
-        set((state) => ({
-          notes: state.notes.map((note) =>
+        set((state) => {
+          const noteToMark = state.notes.find(n => n.nullifier === nullifier);
+          if (!noteToMark) {
+            console.warn('[useShieldedNotes.markNoteSpent] Note not found:', nullifier.slice(0, 16));
+            return state;
+          }
+          if (noteToMark.spent) {
+            console.log('[useShieldedNotes.markNoteSpent] Note already spent:', nullifier.slice(0, 16));
+            return state;
+          }
+          
+          console.log('[useShieldedNotes.markNoteSpent] Marking as spent:', {
+            nullifier: nullifier.slice(0, 16),
+            amount: noteToMark.amount,
+            tokenType: noteToMark.tokenType,
+          });
+          
+          const newNotes = state.notes.map((note) =>
             note.nullifier === nullifier ? { ...note, spent: true } : note
-          ),
-        })),
+          );
+          
+          // Force immediate persistence verification
+          setTimeout(() => {
+            const stored = localStorage.getItem('noctura.shieldedNotes');
+            if (stored) {
+              try {
+                const parsed = JSON.parse(stored);
+                const storedNotes = parsed.state?.notes || [];
+                const foundNote = storedNotes.find((n: ShieldedNoteRecord) => n.nullifier === nullifier);
+                if (foundNote?.spent) {
+                  console.log('[useShieldedNotes.markNoteSpent] ✅ Verified note marked spent in localStorage');
+                } else {
+                  console.error('[useShieldedNotes.markNoteSpent] ⚠️ Note NOT marked spent in localStorage!', {
+                    nullifier: nullifier.slice(0, 16),
+                    foundNote: foundNote ? 'exists but spent=' + foundNote.spent : 'not found',
+                  });
+                }
+              } catch (err) {
+                console.error('[useShieldedNotes.markNoteSpent] Verification failed:', err);
+              }
+            }
+          }, 100);
+          
+          return { notes: newNotes };
+        }),
       markMultipleSpent: (nullifiers) =>
         set((state) => ({
           notes: state.notes.map((note) =>

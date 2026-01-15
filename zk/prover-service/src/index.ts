@@ -5,7 +5,7 @@ import bodyParser from 'body-parser';
 import { AUTHORITY, PORT, RPC_ENDPOINT, NOC_MINT, AIRDROP_LAMPORTS, FEE_COLLECTOR } from './config.js';
 import { generateProof } from './snark.js';
 import { sendNocAirdrop } from './airdrop.js';
-import { relayWithdraw, relayTransfer, RelayWithdrawParams, RelayTransferParams } from './relayer.js';
+import { relayWithdraw, relayTransfer, relayConsolidate, RelayWithdrawParams, RelayTransferParams, RelayConsolidateParams } from './relayer.js';
 
 function formatError(err: unknown): string {
   if (err instanceof Error) {
@@ -92,6 +92,22 @@ app.post('/relay/transfer', async (req: Request, res: Response) => {
     res.json({ signature });
   } catch (err) {
     console.error('[Relayer] Transfer failed:', err);
+    res.status(400).json({ error: formatError(err) });
+  }
+});
+
+// Relayer endpoint: Submit consolidation (merge multiple notes) via relayer
+app.post('/relay/consolidate', async (req: Request, res: Response) => {
+  try {
+    const params: RelayConsolidateParams = req.body;
+    if (!params.proof || !params.publicInputs || !params.inputNullifiers || !params.outputCommitment) {
+      return res.status(400).json({ error: 'Missing required parameters: proof, publicInputs, inputNullifiers, outputCommitment' });
+    }
+    console.log('[Relayer] Received consolidation request, inputs:', params.inputNullifiers.length);
+    const signature = await relayConsolidate(connection, AUTHORITY, params);
+    res.json({ signature });
+  } catch (err) {
+    console.error('[Relayer] Consolidation failed:', err);
     res.status(400).json({ error: formatError(err) });
   }
 });
