@@ -1892,7 +1892,7 @@ export default function App() {
 
     // Always attempt to hydrate if store is empty (helps after browser reloads)
     if (!hasNotes) {
-      const loaded = manualLoadNotes();
+      const loaded = useShieldedNotes.getState().manualLoad();
       if (loaded) {
         console.log('[Shielded Sync] Store hydrated from localStorage');
       } else {
@@ -1916,7 +1916,7 @@ export default function App() {
         })
         .catch((err) => console.warn('[Shielded Sync] Failed to sync nullifiers on entry:', err));
     }
-  }, [keypair, mode, shieldedNotes.length, manualLoadNotes, markMultipleSpent, shieldedNotes]);
+  }, [keypair, mode, shieldedNotes.length, markMultipleSpent]);
 
   // Reset one-time sync flag when wallet changes
   useEffect(() => {
