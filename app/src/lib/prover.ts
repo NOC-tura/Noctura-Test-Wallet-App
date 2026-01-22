@@ -196,6 +196,21 @@ export function relayTransfer(params: {
   });
 }
 
+/**
+ * Send an encrypted note memo in a separate transaction.
+ * Used when the main transfer was too large to include the memo.
+ */
+export function sendEncryptedMemo(encryptedNote: string, transferSignature?: string) {
+  console.log('[Relayer] Sending encrypted memo separately...');
+  return httpWithFailover<{ signature: string }>('/relay/memo', {
+    encryptedNote,
+    transferSignature,
+  }, 30000).then(result => {
+    console.log('[Relayer] Memo sent successfully:', result.signature);
+    return result;
+  });
+}
+
 export function requestNocAirdrop(destination: string) {
   return http<{ signature: string }>(`/airdrop`, { destination });
 }

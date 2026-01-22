@@ -131,6 +131,11 @@ export function Dashboard({
     <div className="flex h-screen bg-[#0a0e27]" style={{ '--theme-color': themeColor } as React.CSSProperties}>
       {/* Sidebar */}
       <div className="sidebar">
+        {/* Logo at top */}
+        <div className="sidebar-logo mb-4">
+          <img src="/NOC2.png" alt="Noctura" className="w-10 h-10 rounded-full" />
+        </div>
+        
         <div className="sidebar-icon" title="Portfolio">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
             <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
@@ -167,26 +172,15 @@ export function Dashboard({
 
       {/* Main Content */}
       <div className="flex-1 dashboard-bg relative">
-        <div className="relative z-10 p-8 flex flex-col h-full">
+        <div className="relative z-10 p-4 pt-2 flex flex-col h-full">
           {/* Header */}
-          <div className="flex justify-between items-center mb-8">
-            {/* Left: Title + Mode Toggle */}
-            <div className="flex items-center gap-6">
-              <h1 className="text-2xl font-bold text-white">Noctura Wallet</h1>
-              <div className="mode-toggle">
-                <button
-                  className={`mode-btn ${isTransparent ? 'active' : ''}`}
-                  onClick={() => onModeChange('transparent')}
-                >
-                  Transparent
-                </button>
-                <button
-                  className={`mode-btn ${!isTransparent ? 'active' : ''}`}
-                  onClick={() => onModeChange('shielded')}
-                >
-                  Shielded
-                </button>
-              </div>
+          <div className="flex justify-between items-center mb-2">
+            {/* Left: Logo + Title */}
+            <div className="flex items-center gap-4">
+              <h1 className="text-2xl font-bold text-white flex items-center gap-4">
+                <img src="/NOC1.png" alt="Noctura" className="h-36 w-auto" />
+                <span className="text-4xl" style={{ marginTop: '-10px' }}>Wallet</span>
+              </h1>
             </div>
 
             {/* Right: Wallet Address with Copy */}
@@ -215,9 +209,39 @@ export function Dashboard({
           </div>
 
           {/* Main Content Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1">
             {/* Left: Balance Card */}
             <div className="lg:col-span-2">
+              {/* Mode Toggle - Inside Balance Widget Area */}
+              <div className="flex justify-center mb-3">
+                <div className="mode-toggle" style={{ gap: '8px' }}>
+                  <button
+                    className={`mode-btn ${isTransparent ? 'active' : ''}`}
+                    onClick={() => onModeChange('transparent')}
+                    style={{ minWidth: '160px', padding: '12px 24px', fontSize: '15px' }}
+                  >
+                    Transparent
+                  </button>
+                  <button
+                    className={`mode-btn ${!isTransparent ? 'active' : ''}`}
+                    onClick={() => onModeChange('shielded')}
+                    style={{ 
+                      minWidth: '160px', 
+                      padding: '12px 24px', 
+                      fontSize: '15px',
+                      ...(!isTransparent ? {
+                        borderColor: '#a855f7',
+                        background: 'rgba(168, 85, 247, 0.15)',
+                        color: '#a855f7',
+                        boxShadow: '0 0 12px rgba(168, 85, 247, 0.3), inset 0 0 8px rgba(168, 85, 247, 0.1)'
+                      } : {})
+                    }}
+                  >
+                    Shielded
+                  </button>
+                </div>
+              </div>
+              
               <div className="balance-card" style={{
                 borderColor: `${themeColor}20`,
                 boxShadow: `inset 0 1px 2px rgba(255, 255, 255, 0.1), 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px ${themeColor}10`
@@ -340,9 +364,9 @@ export function Dashboard({
                   <div className="space-y-3">
                     {shieldedSolBalance > 0 && (
                       <div className="asset-item">
-                        <div className="relative" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', position: 'relative' }}>
+                        <div className="asset-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', position: 'relative' }}>
                           <img src="/sol-logo.png" alt="wSOL" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
-                          <div className="lock-icon" style={{ position: 'absolute', bottom: '-2px', right: '-2px', fontSize: '16px' }}>🔒</div>
+                          <div className="lock-icon" style={{ position: 'absolute', bottom: '-2px', right: '-2px', fontSize: '14px' }}>🔒</div>
                         </div>
                         <div className="asset-info flex-1">
                           <div className="asset-name">Solana</div>
@@ -353,9 +377,9 @@ export function Dashboard({
                     )}
                     {shieldedNocBalance > 0 && (
                       <div className="asset-item">
-                        <div className="relative">
-                          <img src="/logo3.jpg" alt="NOC" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
-                          <div className="lock-icon" style={{ position: 'absolute', bottom: '-2px', right: '-2px', fontSize: '16px' }}>🔒</div>
+                        <div className="asset-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', position: 'relative' }}>
+                          <img src="/logo3.jpg" alt="NOC" style={{ width: '40px', height: '40px', objectFit: 'contain', borderRadius: '50%' }} />
+                          <div className="lock-icon" style={{ position: 'absolute', bottom: '-2px', right: '-2px', fontSize: '14px' }}>🔒</div>
                         </div>
                         <div className="asset-info flex-1">
                           <div className="asset-name">Noctura</div>
@@ -388,45 +412,49 @@ export function Dashboard({
               </button>
             </div>
 
-            {/* Transparent Address */}
-            <div className="input-field">
-              <label className="input-label" style={{ color: '#00f0ff' }}>
-                🔓 Transparent Address (Public)
-              </label>
-              <div className="input-wrapper">
-                <input
-                  type="text"
-                  className="input-box"
-                  value={walletAddress}
-                  readOnly
-                  style={{ paddingRight: '80px', borderColor: '#00f0ff33' }}
-                />
-                <button
-                  className="copy-btn"
-                  onClick={handleCopyAddress}
-                >
-                  {copiedAddress ? '✓ Copied' : 'Copy'}
-                </button>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Standard Solana address. Transactions are visible on blockchain.
-              </p>
-            </div>
+            {/* Transparent Address - only show in transparent mode */}
+            {isTransparent && (
+              <>
+                <div className="input-field">
+                  <label className="input-label" style={{ color: '#00f0ff' }}>
+                    🔓 Transparent Address (Public)
+                  </label>
+                  <div className="input-wrapper">
+                    <input
+                      type="text"
+                      className="input-box"
+                      value={walletAddress}
+                      readOnly
+                      style={{ paddingRight: '80px', borderColor: '#00f0ff33' }}
+                    />
+                    <button
+                      className="copy-btn"
+                      onClick={handleCopyAddress}
+                    >
+                      {copiedAddress ? '✓ Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Standard Solana address. Transactions are visible on blockchain.
+                  </p>
+                </div>
 
-            {/* QR for transparent address */}
-            <div className="qr-container" style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
-              <canvas
-                ref={qrCanvasRef}
-                style={{
-                  width: 160,
-                  height: 160,
-                  borderRadius: '12px',
-                  border: '2px solid #00f0ff',
-                  padding: '8px',
-                  backgroundColor: '#0a0e27',
-                }}
-              />
-            </div>
+                {/* QR for transparent address */}
+                <div className="qr-container" style={{ display: 'flex', justifyContent: 'center', margin: '16px 0' }}>
+                  <canvas
+                    ref={qrCanvasRef}
+                    style={{
+                      width: 160,
+                      height: 160,
+                      borderRadius: '12px',
+                      border: '2px solid #00f0ff',
+                      padding: '8px',
+                      backgroundColor: '#0a0e27',
+                    }}
+                  />
+                </div>
+              </>
+            )}
 
             {/* Shielded Address - only show in shielded mode */}
             {!isTransparent && shieldedAddress && (
@@ -650,10 +678,67 @@ export function Dashboard({
                   const status = tx.err ? 'Failed' : 'Success';
                   const statusColor = tx.err ? 'text-red-400' : 'text-green-400';
                   
-                  // Try to detect transaction type from memo or signature pattern
-                  const isShielded = tx.memo?.includes('shield') || tx.memo?.includes('privacy') || false;
-                  const txTypeIcon = isShielded ? '🔒' : '📤';
-                  const txTypeLabel = isShielded ? 'Shielded' : 'Public';
+                  // Detect transaction type from the type field or memo
+                  const txType = (tx as any).type;
+                  const txIsShielded = (tx as any).isShielded;
+                  
+                  // Get icon and label based on transaction type
+                  let txTypeIcon = '📤';
+                  let txTypeLabel = 'Public';
+                  let labelColor = 'bg-neutral-900';
+                  
+                  if (txType === 'shielded_send') {
+                    txTypeIcon = '🔒';
+                    txTypeLabel = 'Private Send';
+                    labelColor = 'bg-purple-900/50';
+                  } else if (txType === 'shielded_receive') {
+                    txTypeIcon = '🔐';
+                    txTypeLabel = 'Private Receive';
+                    labelColor = 'bg-purple-900/50';
+                  } else if (txType === 'shield_deposit') {
+                    txTypeIcon = '🛡️';
+                    txTypeLabel = 'Shield';
+                    labelColor = 'bg-violet-900/50';
+                  } else if (txType === 'shield_withdraw') {
+                    txTypeIcon = '🔓';
+                    txTypeLabel = 'Unshield';
+                    labelColor = 'bg-violet-900/50';
+                  } else if (txType === 'partial_receive') {
+                    txTypeIcon = '📥';
+                    txTypeLabel = 'Partial Privacy Receive';
+                    labelColor = 'bg-amber-900/50';
+                  } else if (txType === 'public_send') {
+                    txTypeIcon = '📤';
+                    txTypeLabel = 'Public Send';
+                    labelColor = 'bg-neutral-900';
+                  } else if (txType === 'public_receive') {
+                    txTypeIcon = '📥';
+                    txTypeLabel = 'Public Receive';
+                    labelColor = 'bg-green-900/50';
+                  } else if (txType === 'consolidate') {
+                    txTypeIcon = '🔄';
+                    txTypeLabel = 'Consolidate';
+                    labelColor = 'bg-blue-900/50';
+                  } else if (txIsShielded || tx.memo?.includes('shield') || tx.memo?.includes('privacy') || tx.memo?.includes('🔒') || tx.memo?.includes('🛡️') || tx.memo?.includes('🔓') || tx.memo?.includes('🔐')) {
+                    // Detect from memo content
+                    if (tx.memo?.includes('Partial Privacy Receive') || tx.memo?.includes('📥')) {
+                      txTypeIcon = '📥';
+                      txTypeLabel = 'Partial Privacy Receive';
+                      labelColor = 'bg-amber-900/50';
+                    } else if (tx.memo?.includes('Private Receive') || tx.memo?.includes('🔐')) {
+                      txTypeIcon = '🔐';
+                      txTypeLabel = 'Private Receive';
+                      labelColor = 'bg-purple-900/50';
+                    } else if (tx.memo?.includes('Unshield') || tx.memo?.includes('🔓')) {
+                      txTypeIcon = '🔓';
+                      txTypeLabel = 'Unshield';
+                      labelColor = 'bg-violet-900/50';
+                    } else {
+                      txTypeIcon = '🔒';
+                      txTypeLabel = 'Shielded';
+                      labelColor = 'bg-purple-900/50';
+                    }
+                  }
 
                   return (
                     <div 
@@ -665,7 +750,7 @@ export function Dashboard({
                           <div className="flex items-center gap-2 mb-1">
                             <span className="text-lg">{txTypeIcon}</span>
                             <span className={`text-xs font-semibold ${statusColor}`}>{status}</span>
-                            <span className="text-xs text-neutral-500 bg-neutral-900 px-2 py-1 rounded">{txTypeLabel}</span>
+                            <span className={`text-xs text-neutral-300 ${labelColor} px-2 py-1 rounded`}>{txTypeLabel}</span>
                           </div>
                           <p className="text-xs text-neutral-400 mt-1">{date}</p>
                         </div>
@@ -689,7 +774,7 @@ export function Dashboard({
                       
                       {tx.memo && (
                         <div className="text-xs text-neutral-500 mt-2 italic">
-                          Memo: {tx.memo.slice(0, 60)}{tx.memo.length > 60 ? '...' : ''}
+                          {tx.memo.slice(0, 80)}{tx.memo.length > 80 ? '...' : ''}
                         </div>
                       )}
                     </div>
@@ -700,7 +785,14 @@ export function Dashboard({
             
             <div className="mt-4 pt-4 border-t border-neutral-700 text-xs text-neutral-400">
               <p>💡 Tip: Click transaction signature to view details on Solana Explorer</p>
-              <p className="mt-2">Shielded transactions (🔒) hide amounts and are fully private on-chain</p>
+              <p className="mt-2 flex flex-wrap gap-2">
+                <span>🔒 Private Send</span>
+                <span>🔐 Private Receive</span>
+                <span>📥 Partial Privacy</span>
+                <span>🛡️ Shield</span>
+                <span>🔓 Unshield</span>
+                <span>📤 Public</span>
+              </p>
             </div>
           </div>
         </div>
@@ -782,9 +874,13 @@ export function Dashboard({
                   <span>Amount to Shield:</span>
                   <span>{shieldAmount || '0'} {shieldToken}</span>
                 </div>
+                <div className="flex justify-between mb-2">
+                  <span>Privacy Fee:</span>
+                  <span>0.25 NOC</span>
+                </div>
                 <div className="flex justify-between text-neutral-400">
-                  <span>Privacy Fee (0.25 $NOC):</span>
-                  <span>0.25 $NOC</span>
+                  <span>SOL Network Fee:</span>
+                  <span className="text-green-400">Free (Relayer Pays)</span>
                 </div>
               </div>
 

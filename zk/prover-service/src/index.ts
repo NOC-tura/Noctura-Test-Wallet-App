@@ -112,6 +112,51 @@ app.post('/relay/consolidate', async (req: Request, res: Response) => {
   }
 });
 
+// Relayer endpoint: Send encrypted note memo in a separate transaction
+// Used when the main transfer transaction is too large to include the memo
+import { Transaction, TransactionInstruction, Keypair } from '@solana/web3.js';
+app.post('/relay/memo', async (req: Request, res: Response) => {
+  try {
+    const { encryptedNote, transferSignature } = req.body;
+    if (!encryptedNote) {
+      return res.status(400).json({ error: 'Missing encryptedNote' });
+    }
+    
+    console.log('[Relayer] Received memo request for transfer:', transferSignature?.slice(0, 20));
+    console.log('[Relayer] Memo data length:', encryptedNote.length);
+    
+    const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+    
+    // Include reference to the transfer transaction if provided
+    const memoData = transferSignature 
+      ? `noctura:${transferSignature.slice(0, 20)}:${encryptedNote}`
+      : `noctura:${encryptedNote}`;
+    
+    const memoIx = new TransactionInstruction({
+      keys: [],
+      programId: MEMO_PROGRAM_ID,
+      data: Buffer.from(memoData, 'utf-8'),
+    });
+    
+    const tx = new Transaction().add(memoIx);
+    tx.feePayer = AUTHORITY.publicKey;
+    const latestBlockhash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = latestBlockhash.blockhash;
+    tx.sign(AUTHORITY);
+    
+    const signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    
+    console.log('[Relayer] Memo sent:', signature);
+    res.json({ signature });
+  } catch (err) {
+    console.error('[Relayer] Memo failed:', err);
+    res.status(400).json({ error: formatError(err) });
+  }
+});
+
 // Handle uncaught errors to prevent silent crashes
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);

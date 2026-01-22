@@ -20,6 +20,10 @@ import { SOLANA_RPC } from './constants';
 
 // Program ID for Noctura Shield
 const PROGRAM_ID = new PublicKey('3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz');
+// Memo Program ID - we also scan memo transactions for encrypted notes
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+// Relayer fee payer address - used to find memo transactions sent by relayer
+const RELAYER_FEE_PAYER = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
 
 // Scanner configuration
 const SCAN_INTERVAL_MS = 30_000; // Scan every 30 seconds
@@ -110,24 +114,52 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
   try {
     console.log('[Scanner] Scanning for new notes since slot:', registry.lastScannedSlot);
     
-    // Get recent signatures for the program
-    const signatures = await connection.getSignaturesForAddress(
+    // Get recent signatures for the Noctura program
+    const nocturaSigs = await connection.getSignaturesForAddress(
       PROGRAM_ID,
       { limit: MAX_SIGNATURES_PER_SCAN },
       'confirmed'
     );
+    console.log('[Scanner] Noctura program signatures:', nocturaSigs.length);
+    
+    // Scan relayer fee payer for memo transactions with encrypted notes
+    // This is needed because memo transactions are signed by the relayer, not the memo program
+    console.log('[Scanner] Scanning relayer address:', RELAYER_FEE_PAYER.toBase58());
+    const relayerSigs = await connection.getSignaturesForAddress(
+      RELAYER_FEE_PAYER,
+      { limit: MAX_SIGNATURES_PER_SCAN },
+      'confirmed'
+    );
+    console.log('[Scanner] Relayer signatures:', relayerSigs.length);
+    if (relayerSigs.length > 0) {
+      console.log('[Scanner] First 5 relayer signatures:', relayerSigs.slice(0, 5).map(s => s.signature.slice(0, 20)));
+    }
+    
+    // Combine and deduplicate signatures
+    const allSignatures = [...nocturaSigs, ...relayerSigs];
+    const signatureMap = new Map<string, typeof nocturaSigs[0]>();
+    for (const sig of allSignatures) {
+      if (!signatureMap.has(sig.signature)) {
+        signatureMap.set(sig.signature, sig);
+      }
+    }
+    const signatures = Array.from(signatureMap.values());
     
     if (signatures.length === 0) {
-      console.log('[Scanner] No new transactions found');
+      console.log('[Scanner] No transactions found from either source');
       return { newNotesFound: 0, notesForMe: [], lastScannedSlot: registry.lastScannedSlot, scannedSignatures: 0 };
     }
+    
+    console.log('[Scanner] Total unique transactions from both sources:', signatures.length);
+    console.log('[Scanner] Last scanned slot:', registry.lastScannedSlot);
+    console.log('[Scanner] Latest tx slot:', Math.max(...signatures.map(s => s.slot)));
     
     // Filter to signatures we haven't seen
     const newSignatures = signatures.filter(sig => 
       sig.slot > registry.lastScannedSlot && !sig.err
     );
     
-    console.log('[Scanner] Found', newSignatures.length, 'new transactions to check');
+    console.log('[Scanner] Found', newSignatures.length, 'new transactions to check (after slot filter)');
     
     // Get ECDH private key for decryption
     const ecdhPrivateKey = getECDHPrivateKey(keypair);
@@ -138,13 +170,17 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
     // Process each transaction
     for (const sigInfo of newSignatures) {
       try {
+        console.log('[Scanner] Processing tx:', sigInfo.signature.slice(0, 20), '...');
+        
         // Fetch transaction details
         const tx = await connection.getTransaction(sigInfo.signature, {
           commitment: 'confirmed',
           maxSupportedTransactionVersion: 0,
         });
         
-        if (!tx || !tx.meta) continue;
+        if (!tx || !tx.meta) {
+          continue;
+        }
         
         // Look for encrypted notes in transaction logs/memos
         const encryptedNotes = extractEncryptedNotesFromTx(tx);
@@ -153,10 +189,11 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
           newNotesFound++;
           
           // Try to decrypt
+          console.log('[Scanner] Attempting to decrypt note...');
           const decryptedPayload = decryptNoteWithViewKey(encryptedData, ecdhPrivateKey);
           
           if (decryptedPayload) {
-            console.log('[Scanner] 🎉 Found note for me! Amount:', decryptedPayload.amount);
+            console.log('[Scanner] 🎉 Found note for me! Amount:', decryptedPayload.amount, 'Token:', decryptedPayload.tokenType);
             
             const incoming: DecryptedIncomingNote = {
               notePayload: decryptedPayload,
@@ -234,9 +271,30 @@ function extractEncryptedNotesFromTx(tx: any): Array<{ commitment: string; encry
     }
     
     // Also look for noctura: prefix (from memo program)
+    // Format can be: noctura:<encryptedData> or noctura:<txRef>:<encryptedData>
+    // Log format from memo: "Program log: Memo (len X): \"noctura:...\""
     if (log.includes('noctura:')) {
+      console.log('[Scanner] Found log with noctura: prefix');
+      console.log('[Scanner] Full log:', log);
+      console.log('[Scanner] Full log length:', log.length);
+      
       const dataStart = log.indexOf('noctura:') + 'noctura:'.length;
-      const encryptedDataStr = log.slice(dataStart).trim();
+      let encryptedDataStr = log.slice(dataStart).trim();
+      
+      // Remove trailing escaped quote if present (from memo log format)
+      if (encryptedDataStr.endsWith('\\"')) {
+        encryptedDataStr = encryptedDataStr.slice(0, -2);
+      } else if (encryptedDataStr.endsWith('"')) {
+        encryptedDataStr = encryptedDataStr.slice(0, -1);
+      }
+      
+      // Check if there's a transaction reference (20 char prefix before next colon)
+      const colonIndex = encryptedDataStr.indexOf(':');
+      if (colonIndex === 20) {
+        // Has transaction reference, skip it
+        encryptedDataStr = encryptedDataStr.slice(21);
+      }
+      
       const encryptedData = deserializeEncryptedNote(encryptedDataStr);
       
       if (encryptedData) {
@@ -249,13 +307,13 @@ function extractEncryptedNotesFromTx(tx: any): Array<{ commitment: string; encry
   
   // Check transaction memo instructions for memo program
   // Memo program ID: MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr
-  const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+  const MEMO_PROGRAM_ID_STR = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
   
   if (tx.transaction?.message?.instructions) {
     for (const ix of tx.transaction.message.instructions) {
       // Check if this is a memo instruction
       const programId = tx.transaction.message.accountKeys?.[ix.programIdIndex]?.toString?.();
-      if (programId === MEMO_PROGRAM_ID) {
+      if (programId === MEMO_PROGRAM_ID_STR) {
         try {
           // Memo data is base58 encoded in instruction data
           const memoData = ix.data;
@@ -264,12 +322,20 @@ function extractEncryptedNotesFromTx(tx: any): Array<{ commitment: string; encry
             const decoded = Buffer.from(memoData, 'base64').toString('utf-8');
             
             if (decoded.startsWith('noctura:')) {
-              const encryptedDataStr = decoded.slice('noctura:'.length);
+              let encryptedDataStr = decoded.slice('noctura:'.length);
+              
+              // Check if there's a transaction reference (20 char prefix before next colon)
+              const colonIndex = encryptedDataStr.indexOf(':');
+              if (colonIndex === 20) {
+                // Has transaction reference, skip it
+                encryptedDataStr = encryptedDataStr.slice(21);
+              }
+              
               const encryptedData = deserializeEncryptedNote(encryptedDataStr);
               
               if (encryptedData) {
                 results.push({ commitment: 'encrypted', encryptedData });
-                console.log('[Scanner] Found encrypted note in memo');
+                console.log('[Scanner] Found encrypted note in memo instruction');
               }
             }
           }

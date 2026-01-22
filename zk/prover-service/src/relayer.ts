@@ -1,10 +1,13 @@
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram, ComputeBudgetProgram } from '@solana/web3.js';
 import * as anchor from '@coral-xyz/anchor';
 import { Program } from '@coral-xyz/anchor';
 import * as spl from '@solana/spl-token';
 import BN from 'bn.js';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
+
+// Compute budget for ZK proof verification (default 200k is not enough)
+const COMPUTE_UNITS_FOR_ZK = 400_000;
 
 const splToken = spl as Record<string, any>;
 
@@ -316,7 +319,12 @@ export async function relayWithdraw(
       })
       .instruction();
     
-    const withdrawTx = new Transaction().add(withdrawIx);
+    // Request more compute units for ZK proof verification
+    const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+      units: COMPUTE_UNITS_FOR_ZK,
+    });
+    
+    const withdrawTx = new Transaction().add(computeBudgetIx).add(withdrawIx);
     const withdrawSig = await sendAndConfirmTx(connection, withdrawTx, [relayerKeypair], 'Withdrawal to relayer ATA');
 
     // Step 2: Transfer recipient amount to recipient
@@ -387,6 +395,11 @@ export async function relayWithdraw(
     // Check if target ATA exists, create if needed
     const ataInfo = await connection.getAccountInfo(targetAta);
     const withdrawTx = new Transaction();
+    
+    // Request more compute units for ZK proof verification
+    withdrawTx.add(ComputeBudgetProgram.setComputeUnitLimit({
+      units: COMPUTE_UNITS_FOR_ZK,
+    }));
     
     if (!ataInfo) {
       console.log('[Relayer] Recipient ATA does not exist, creating it:', targetAta.toBase58());
@@ -490,7 +503,12 @@ async function relayWithdrawSol(
     })
     .instruction();
 
-  const withdrawTx = new Transaction().add(withdrawIx);
+  // Request more compute units for ZK proof verification
+  const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+    units: COMPUTE_UNITS_FOR_ZK,
+  });
+
+  const withdrawTx = new Transaction().add(computeBudgetIx).add(withdrawIx);
   const signature = await sendAndConfirmTx(connection, withdrawTx, [relayerKeypair], 'Native SOL withdrawal');
   
   console.log('[Relayer] Native SOL withdrawal confirmed:', signature);
@@ -560,23 +578,49 @@ export async function relayTransfer(
     })
     .instruction();
 
-  const tx = new Transaction().add(ix);
+  // Request more compute units for ZK proof verification (default 200k is not enough)
+  const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+    units: COMPUTE_UNITS_FOR_ZK,
+  });
+
+  const tx = new Transaction().add(computeBudgetIx).add(ix);
   
-  // Add encrypted note as memo for automatic discovery by recipient
+  // Set fee payer and blockhash first to calculate size
+  tx.feePayer = relayerKeypair.publicKey;
+  const latestBlockhash = await getBlockhashWithRetry(connection);
+  tx.recentBlockhash = latestBlockhash.blockhash;
+  
+  // Check if we can add encrypted note memo without exceeding size limit
+  const MAX_TX_SIZE = 1232; // Solana max transaction size
+  const MEMO_OVERHEAD = 50; // Account for memo instruction overhead
+  
   if (encryptedNote) {
+    const memoData = `noctura:${encryptedNote}`;
     const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
     const memoIx = new TransactionInstruction({
       keys: [],
       programId: MEMO_PROGRAM_ID,
-      data: Buffer.from(`noctura:${encryptedNote}`, 'utf-8'),
+      data: Buffer.from(memoData, 'utf-8'),
     });
-    tx.add(memoIx);
-    console.log('[Relayer] Added encrypted note memo for automatic discovery');
+    
+    // Estimate size without signing (which would fail if too large)
+    // Base transaction without memo is ~800 bytes, memo adds ~(encryptedNote.length + 20)
+    const estimatedMemoSize = Buffer.from(memoData, 'utf-8').length + 50; // instruction overhead
+    const baseTransactionSize = 850; // Approximate base size for transfer instruction + ZK proof
+    const estimatedTotalSize = baseTransactionSize + estimatedMemoSize;
+    
+    console.log(`[Relayer] Estimated transaction size with memo: ${estimatedTotalSize} bytes (limit: ${MAX_TX_SIZE})`);
+    console.log(`[Relayer] Memo size: ${Buffer.from(memoData, 'utf-8').length} bytes`);
+    
+    if (estimatedTotalSize <= MAX_TX_SIZE) {
+      tx.add(memoIx);
+      console.log('[Relayer] Added encrypted note memo for automatic discovery');
+    } else {
+      console.warn(`[Relayer] Skipping memo - transaction would be too large (~${estimatedTotalSize} > ${MAX_TX_SIZE})`);
+      console.warn('[Relayer] Recipient will need to manually claim the note');
+    }
   }
   
-  tx.feePayer = relayerKeypair.publicKey;
-  const latestBlockhash = await getBlockhashWithRetry(connection);
-  tx.recentBlockhash = latestBlockhash.blockhash;
   tx.sign(relayerKeypair);
 
   // First simulate to catch errors before sending
@@ -678,7 +722,12 @@ export async function relayConsolidate(
     })
     .instruction();
 
-  const tx = new Transaction().add(ix);
+  // Request more compute units for ZK proof verification
+  const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+    units: COMPUTE_UNITS_FOR_ZK,
+  });
+
+  const tx = new Transaction().add(computeBudgetIx).add(ix);
   tx.feePayer = relayerKeypair.publicKey;
   const latestBlockhash = await getBlockhashWithRetry(connection);
   tx.recentBlockhash = latestBlockhash.blockhash;

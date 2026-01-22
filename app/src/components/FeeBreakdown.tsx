@@ -1,6 +1,6 @@
 import { SOL_FEE } from '../utils/fees';
 
-export function FeeBreakdown({ nocFee, solFee = SOL_FEE }: { nocFee: number; solFee?: number }) {
+export function FeeBreakdown({ nocFee, solFee = SOL_FEE, relayerPaysGas = false }: { nocFee: number; solFee?: number; relayerPaysGas?: boolean }) {
   return (
     <div className="space-y-2">
       <h3 className="font-semibold">Transaction Fees</h3>
@@ -10,15 +10,25 @@ export function FeeBreakdown({ nocFee, solFee = SOL_FEE }: { nocFee: number; sol
       </div>
       <div className="flex items-center justify-between text-sm">
         <span>SOL Fee:</span>
-        <span className="font-mono">{solFee.toFixed(9)} SOL</span>
+        {relayerPaysGas ? (
+          <span className="text-green-400 text-xs">Covered by relayer ✓</span>
+        ) : (
+          <span className="font-mono">~{solFee.toFixed(6)} SOL</span>
+        )}
       </div>
       <div className="flex items-center justify-between font-semibold">
         <span>Total:</span>
-        <span className="font-mono">{nocFee.toFixed(2)} NOC + {solFee.toFixed(9)} SOL</span>
+        {relayerPaysGas ? (
+          <span className="font-mono">{nocFee.toFixed(2)} NOC only</span>
+        ) : (
+          <span className="font-mono">{nocFee.toFixed(2)} NOC + ~{solFee.toFixed(6)} SOL</span>
+        )}
       </div>
-      <button className="text-blue-600 text-sm underline" type="button">
-        ℹ️ Why these fees?
-      </button>
+      <p className="text-xs text-neutral-500 mt-1">
+        {relayerPaysGas 
+          ? 'The privacy fee covers relayer service including Solana gas fees.'
+          : 'NOC privacy fee + standard Solana network fee.'}
+      </p>
     </div>
   );
 }

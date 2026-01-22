@@ -5,6 +5,9 @@ import { config } from '../config.js';
 
 const router = Router();
 
+// Memo program ID
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+
 /**
  * Health check endpoint
  */
@@ -213,6 +216,63 @@ router.post('/consolidate', async (req: Request, res: Response) => {
     res.json({ signature, status: 'success' });
   } catch (error: any) {
     console.error('Consolidate relay error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /relay/memo
+ * Sends an encrypted note as a memo transaction for recipient discovery.
+ * This is used for shielded-to-shielded transfers where the encrypted note
+ * data is too large to include in the main transfer transaction.
+ */
+router.post('/memo', async (req: Request, res: Response) => {
+  try {
+    const { encryptedNote, transferSignature } = req.body;
+
+    if (!encryptedNote) {
+      return res.status(400).json({ error: 'Missing encryptedNote field' });
+    }
+
+    console.log('[Relay/Memo] Sending encrypted memo, length:', encryptedNote.length);
+    if (transferSignature) {
+      console.log('[Relay/Memo] Associated with transfer:', transferSignature.slice(0, 20) + '...');
+    }
+
+    const client = new HeliusClient();
+
+    // Build a memo instruction with the encrypted note data
+    // Format: noctura:<txRef>:<encryptedData> or noctura:<encryptedData>
+    let memoData: string;
+    if (transferSignature && transferSignature.length >= 20) {
+      // Include first 20 chars of transfer signature as reference
+      memoData = `noctura:${transferSignature.slice(0, 20)}:${encryptedNote}`;
+    } else {
+      memoData = `noctura:${encryptedNote}`;
+    }
+
+    // Check memo size - Solana memos have a limit
+    const memoBytes = Buffer.from(memoData, 'utf-8');
+    if (memoBytes.length > 566) {
+      // Standard memo size limit is around 566 bytes
+      console.warn('[Relay/Memo] Memo size warning:', memoBytes.length, 'bytes (limit ~566)');
+      // Try without transaction reference to save space
+      memoData = `noctura:${encryptedNote}`;
+    }
+
+    const memoInstruction = new TransactionInstruction({
+      programId: MEMO_PROGRAM_ID,
+      keys: [],
+      data: Buffer.from(memoData, 'utf-8'),
+    });
+
+    const transaction = new Transaction().add(memoInstruction);
+    const signature = await client.submitTransaction(transaction);
+
+    console.log('[Relay/Memo] Memo sent successfully:', signature);
+    res.json({ signature, status: 'success' });
+  } catch (error: any) {
+    console.error('[Relay/Memo] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
