@@ -5,8 +5,9 @@ services:
     region: oregon
     plan: free
     rootDir: zk/prover-service
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: node dist/index.js
+    numInstances: 1
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
