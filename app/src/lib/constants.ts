@@ -22,8 +22,18 @@ export const SOL_ZK_TOKEN_ID = '1'; // Simple constant for SOL in ZK circuits
 export const NOC_ZK_TOKEN_ID = NOC_TOKEN_MINT; // NOC mint address (will be hashed)
 
 export const SHIELD_PROGRAM_ID = readEnv('VITE_SHIELD_PROGRAM', '3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz');
-export const HeliusRpcUrl = (globalThis as any).__HELIUS_URL__ as string;
-export const ProverServiceUrl = (globalThis as any).__PROVER_URL__ as string;
+
+// RPC URL with fallback
+const buildTimeRpc = (globalThis as any).__HELIUS_URL__ as string | undefined;
+export const HeliusRpcUrl = buildTimeRpc && buildTimeRpc.startsWith('http') 
+  ? buildTimeRpc 
+  : readEnv('VITE_SOLANA_RPC_URL', 'https://api.devnet.solana.com');
+
+const buildTimeProver = (globalThis as any).__PROVER_URL__ as string | undefined;
+export const ProverServiceUrl = buildTimeProver && buildTimeProver.startsWith('http')
+  ? buildTimeProver
+  : readEnv('VITE_PROVER_URL', 'http://localhost:8787');
+
 export const INITIAL_AIRDROP_AMOUNT = 10_000;
 
 // Relayer endpoints for failover (comma-separated; parsed from env or config)
