@@ -1,5 +1,5 @@
 import { config as loadEnv } from 'dotenv';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { Keypair } from '@solana/web3.js';
 
@@ -19,9 +19,36 @@ export const AIRDROP_LAMPORTS = AIRDROP_TOKENS * 10n ** BigInt(NOC_DECIMALS);
 // Privacy fee: 0.25 NOC for relayed shielded transactions
 export const PRIVACY_FEE_ATOMS = 250_000n; // 0.25 NOC (6 decimals)
 
-const keypairPath = process.env.AUTHORITY_KEYPAIR || DEFAULT_KEYPAIR;
-const keypairBytes = JSON.parse(readFileSync(keypairPath, 'utf-8'));
-export const AUTHORITY = Keypair.fromSecretKey(new Uint8Array(keypairBytes));
+// Load keypair from env var (base64 JSON array) or file path
+function loadKeypair(): Keypair {
+  // Option 1: Base64 encoded keypair in env var (for production)
+  if (process.env.AUTHORITY_KEYPAIR_BASE64) {
+    const decoded = Buffer.from(process.env.AUTHORITY_KEYPAIR_BASE64, 'base64').toString('utf-8');
+    const keypairBytes = JSON.parse(decoded);
+    return Keypair.fromSecretKey(new Uint8Array(keypairBytes));
+  }
+  
+  // Option 2: JSON array directly in env var
+  if (process.env.AUTHORITY_KEYPAIR_JSON) {
+    const keypairBytes = JSON.parse(process.env.AUTHORITY_KEYPAIR_JSON);
+    return Keypair.fromSecretKey(new Uint8Array(keypairBytes));
+  }
+  
+  // Option 3: File path
+  const keypairPath = process.env.AUTHORITY_KEYPAIR || DEFAULT_KEYPAIR;
+  if (existsSync(keypairPath)) {
+    const keypairBytes = JSON.parse(readFileSync(keypairPath, 'utf-8'));
+    return Keypair.fromSecretKey(new Uint8Array(keypairBytes));
+  }
+  
+  // Option 4: Generate a new keypair (for testing/demo only)
+  console.warn('[Config] WARNING: No keypair found, generating ephemeral keypair. Fund this address for relayer to work.');
+  const newKeypair = Keypair.generate();
+  console.log(`[Config] Generated relayer address: ${newKeypair.publicKey.toBase58()}`);
+  return newKeypair;
+}
+
+export const AUTHORITY = loadKeypair();
 
 // Fee collector address - receives all privacy fees
 // Default to AUTHORITY if not specified
