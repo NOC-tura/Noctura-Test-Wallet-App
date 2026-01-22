@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: noctura-relayer
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8787
+      - key: SOLANA_RPC_URL
+        value: https://api.devnet.solana.com
