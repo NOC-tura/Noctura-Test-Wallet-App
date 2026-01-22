@@ -4,6 +4,7 @@ services:
     runtime: node
     region: oregon
     plan: free
+    rootDir: zk/prover-service
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /health
