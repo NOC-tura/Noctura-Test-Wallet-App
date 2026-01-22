@@ -7,11 +7,11 @@ loadEnv();
 
 const DEFAULT_KEYPAIR = '/Users/banel/config/solana/id.json';
 
-export const RPC_URL = process.env.RPC_URL || 'https://api.testnet.solana.com';
+export const RPC_URL = process.env.RPC_URL || process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 export const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 export const CIRCUIT_BUILD_DIR = process.env.CIRCUIT_BUILD_DIR || resolve(process.cwd(), '..', 'build');
 export const KEYS_DIR = process.env.ZKEY_DIR || resolve(process.cwd(), '..', 'keys');
-export const NOC_MINT = process.env.NOC_MINT || 'EvPfUBA97CWnKP6apRqmJYSzudonTCZCzH5tQZ7fk649';
+export const NOC_MINT = process.env.NOC_MINT || '2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb';
 export const NOC_DECIMALS = Number(process.env.NOC_DECIMALS || '6');
 const AIRDROP_TOKENS = BigInt(process.env.AIRDROP_AMOUNT || '10000');
 export const AIRDROP_LAMPORTS = AIRDROP_TOKENS * 10n ** BigInt(NOC_DECIMALS);
