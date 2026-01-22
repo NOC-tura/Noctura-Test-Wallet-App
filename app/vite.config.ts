@@ -63,7 +63,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     optimizeDeps: {
-      include: ['buffer', 'util', 'process'],
+      include: ['buffer', 'util', 'process', 'big-integer'],
     },
     build: {
       chunkSizeWarningLimit: 4000,
