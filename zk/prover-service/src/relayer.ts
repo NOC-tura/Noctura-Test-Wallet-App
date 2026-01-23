@@ -80,20 +80,20 @@ let _idl: any = null;
 function getIDL() {
   if (_idl) return _idl;
   
-  // Try multiple paths
+  // Try multiple paths (relative to cwd which is zk/prover-service on Render)
   const paths = [
     resolve(process.cwd(), '..', '..', 'target', 'idl', 'noctura_shield.json'),
     resolve(process.cwd(), '..', 'target', 'idl', 'noctura_shield.json'),
     resolve(process.cwd(), 'target', 'idl', 'noctura_shield.json'),
-    resolve(__dirname, '..', '..', 'target', 'idl', 'noctura_shield.json'),
     '/Users/banel/Noctura-Wallet/target/idl/noctura_shield.json',
   ];
   
   console.log('[Relayer] Looking for IDL, cwd:', process.cwd());
   
   for (const p of paths) {
-    console.log('[Relayer] Checking IDL path:', p, 'exists:', existsSync(p));
-    if (existsSync(p)) {
+    const exists = existsSync(p);
+    console.log('[Relayer] Checking IDL path:', p, 'exists:', exists);
+    if (exists) {
       try {
         _idl = JSON.parse(readFileSync(p, 'utf-8'));
         console.log('[Relayer] IDL loaded from:', p);
