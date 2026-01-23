@@ -3034,160 +3034,147 @@ export default function App() {
         const { inputNote, recipientNote, changeNote, merkleProof, spendNote, recipientPublicKey, trimmedRecipient, tokenType, parsedAmount, changeAmount } = pendingTransfer;
         const walletAddress = keypair.publicKey.toBase58();
         
-        // Collect 0.25 NOC privacy fee first (for ALL shielded-to-shielded transfers)
-        // IMPORTANT: The withdraw circuit requires the FULL note amount, so we need
-        // a note that's EXACTLY 0.25 NOC.
-        setStatus('Preparing privacy fee (0.25 NOC)...');
+        // For NOC transfers: fee is already included in the change calculation (deducted from change)
+        // For SOL transfers: we need to collect a separate 0.25 NOC fee
         
-        // Find a NOC note to pay the fee from
-        // For NOC transfers, exclude the note being used for the transfer itself
-        // Use fresh state from zustand store to avoid stale closure data
-        const freshNotes = useShieldedNotes.getState().notes;
-        const nocNotes = freshNotes.filter(n => {
-          if (n.spent || n.owner !== walletAddress) return false;
-          // Must be explicitly NOC token
-          const isNoc = n.tokenType === 'NOC' || n.tokenMintAddress === NOC_TOKEN_MINT;
-          if (!isNoc) return false;
-          // For NOC transfers, don't use the same note we're transferring from
-          if (tokenType === 'NOC' && n.nullifier === spendNote.nullifier) return false;
-          return true;
-        });
-        
-        const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
-        if (nocNotes.length === 0 || totalNocAvailable < PRIVACY_FEE_ATOMS) {
-          setStatus('❌ Insufficient NOC for privacy fee. Need 0.25 NOC shielded.');
-          setTransferReview(null);
-          resetPendingShieldedTransfer();
-          throw new Error('Insufficient NOC in vault for privacy fee. Need 0.25 NOC shielded to pay for private transfers. Please deposit NOC first.');
-        }
-        
-        // Look for an EXACT 0.25 NOC note (withdraw circuit requires full amount)
-        let exactFeeNote = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
-        
-        if (!exactFeeNote) {
-          // No exact fee note - create one from a larger NOC note first
-          console.log('[Transfer] No exact 0.25 NOC fee note found - creating one...');
-          console.log('[Transfer] Available NOC notes:', nocNotes.map(n => ({ 
-            amount: Number(BigInt(n.amount)) / 1e6,
-            nullifier: n.nullifier.slice(0, 10),
-            tokenType: n.tokenType,
-          })));
+        if (tokenType !== 'NOC') {
+          // SOL transfer - need to collect 0.25 NOC fee separately
+          setStatus('Preparing privacy fee (0.25 NOC)...');
           
-          // Find a NOC note large enough to split
-          const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
+          // Find a NOC note to pay the fee from
+          const freshNotes = useShieldedNotes.getState().notes;
+          const nocNotes = freshNotes.filter(n => {
+            if (n.spent || n.owner !== walletAddress) return false;
+            const isNoc = n.tokenType === 'NOC' || n.tokenMintAddress === NOC_TOKEN_MINT;
+            return isNoc;
+          });
           
-          if (!splittableNote) {
-            setStatus('❌ Cannot create fee note: no NOC note larger than 0.25 NOC available.');
+          const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+          if (nocNotes.length === 0 || totalNocAvailable < PRIVACY_FEE_ATOMS) {
+            setStatus('❌ Insufficient NOC for privacy fee. Need 0.25 NOC shielded.');
             setTransferReview(null);
             resetPendingShieldedTransfer();
-            throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available (excluding transfer note).');
+            throw new Error('Insufficient NOC in vault for privacy fee. Need 0.25 NOC shielded to pay for private transfers. Please deposit NOC first.');
           }
           
-          console.log('[Transfer] Splitting note:', Number(BigInt(splittableNote.amount)) / 1e6, 'NOC');
-          setStatus('Creating 0.25 NOC fee note from vault...');
+          // Look for an EXACT 0.25 NOC note (withdraw circuit requires full amount)
+          let exactFeeNote = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
           
-          // Create fee note via self-transfer (split the note)
-          const allUnspent = useShieldedNotes.getState().notes.filter(
-            n => n.owner === walletAddress && !n.spent
-          );
+          if (!exactFeeNote) {
+            // No exact fee note - create one from a larger NOC note first
+            console.log('[Transfer] No exact 0.25 NOC fee note found - creating one...');
+            
+            const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
+            
+            if (!splittableNote) {
+              setStatus('❌ Cannot create fee note: no NOC note larger than 0.25 NOC available.');
+              setTransferReview(null);
+              resetPendingShieldedTransfer();
+              throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available.');
+            }
+            
+            console.log('[Transfer] Splitting note:', Number(BigInt(splittableNote.amount)) / 1e6, 'NOC');
+            setStatus('Creating 0.25 NOC fee note from vault...');
+            
+            const allUnspent = useShieldedNotes.getState().notes.filter(
+              n => n.owner === walletAddress && !n.spent
+            );
+            
+            const splitInputNote: Note = {
+              secret: BigInt(splittableNote.secret),
+              amount: BigInt(splittableNote.amount),
+              tokenMint: getCorrectTokenMint(splittableNote),
+              blinding: BigInt(splittableNote.blinding),
+              rho: BigInt(splittableNote.rho),
+              commitment: BigInt(splittableNote.commitment),
+              nullifier: BigInt(splittableNote.nullifier),
+            };
+            
+            const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
+            
+            const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
+            const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
+            const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
+            
+            const splitWitness = serializeTransferWitness({
+              inputNote: splitInputNote,
+              merkleProof: splitMerkleProof,
+              outputNote1: newFeeNote,
+              outputNote2: splitChangeNote,
+            });
+            
+            console.log('[Transfer] Generating proof to split note...');
+            const splitProof = await proveCircuit('transfer', splitWitness);
+            
+            const splitResult = await relayTransfer({
+              proof: splitProof,
+              nullifier: splittableNote.nullifier,
+              outputCommitment1: newFeeNote.commitment.toString(),
+              outputCommitment2: splitChangeNote.commitment.toString(),
+            });
+            
+            console.log('[Transfer] ✅ Created fee note:', splitResult.signature);
+            
+            markNoteSpent(splittableNote.nullifier);
+            
+            const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+            const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+            addShieldedNote(feeNoteRecord);
+            addShieldedNote(changeNoteRecord);
+            
+            exactFeeNote = feeNoteRecord;
+            await new Promise(r => setTimeout(r, 200));
+          }
           
-          const splitInputNote: Note = {
-            secret: BigInt(splittableNote.secret),
-            amount: BigInt(splittableNote.amount),
-            tokenMint: getCorrectTokenMint(splittableNote), // Use correct mint, not corrupted stored value
-            blinding: BigInt(splittableNote.blinding),
-            rho: BigInt(splittableNote.rho),
-            commitment: BigInt(splittableNote.commitment),
-            nullifier: BigInt(splittableNote.nullifier),
+          // Collect the 0.25 NOC fee
+          setStatus('Collecting privacy fee (0.25 NOC)...');
+          console.log('[Transfer] Collecting 0.25 NOC fee note');
+          
+          const allUnspentNotes = useShieldedNotes.getState().notes.filter(n => n.owner === walletAddress && !n.spent);
+          const feeMerkleProof = buildMerkleProof(allUnspentNotes, exactFeeNote);
+          
+          const feeInputNote: Note = {
+            secret: BigInt(exactFeeNote.secret),
+            amount: BigInt(exactFeeNote.amount),
+            tokenMint: getCorrectTokenMint(exactFeeNote),
+            blinding: BigInt(exactFeeNote.blinding),
+            rho: BigInt(exactFeeNote.rho),
+            commitment: BigInt(exactFeeNote.commitment),
+            nullifier: BigInt(exactFeeNote.nullifier),
           };
           
-          const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
+          const nocMint = new PublicKey(NOC_TOKEN_MINT);
+          const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
+          const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner, false);
           
-          // Create fee note (0.25 NOC) + change note (rest)
-          const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
-          const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
-          const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
-          
-          const splitWitness = serializeTransferWitness({
-            inputNote: splitInputNote,
-            merkleProof: splitMerkleProof,
-            outputNote1: newFeeNote,
-            outputNote2: splitChangeNote,
+          const feeWitness = serializeWithdrawWitness({
+            inputNote: feeInputNote,
+            merkleProof: feeMerkleProof,
+            receiver: pubkeyToField(feeCollectorOwner),
           });
           
-          console.log('[Transfer] Generating proof to split note...');
-          const splitProof = await proveCircuit('transfer', splitWitness);
+          setStatus('Generating fee proof...');
+          const feeProof = await proveCircuit('withdraw', feeWitness);
           
-          const splitResult = await relayTransfer({
-            proof: splitProof,
-            nullifier: splittableNote.nullifier,
-            outputCommitment1: newFeeNote.commitment.toString(),
-            outputCommitment2: splitChangeNote.commitment.toString(),
-          });
-          
-          console.log('[Transfer] ✅ Created fee note:', splitResult.signature);
-          
-          // Mark old note as spent and save new notes
-          markNoteSpent(splittableNote.nullifier);
-          
-          const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
-          const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
-          addShieldedNote(feeNoteRecord);
-          addShieldedNote(changeNoteRecord);
-          
-          // Use the newly created fee note
-          exactFeeNote = feeNoteRecord;
-          
-          // Small delay to let state update
-          await new Promise(r => setTimeout(r, 200));
-        }
-        
-        // Now we have an exact 0.25 NOC fee note - collect it
-        setStatus('Collecting privacy fee (0.25 NOC)...');
-        console.log('[Transfer] Collecting 0.25 NOC fee note');
-        
-        // Re-fetch unspent notes in case we just created the fee note
-        const allUnspentNotes = useShieldedNotes.getState().notes.filter(n => n.owner === walletAddress && !n.spent);
-        const feeMerkleProof = buildMerkleProof(allUnspentNotes, exactFeeNote);
-        
-        const feeInputNote: Note = {
-          secret: BigInt(exactFeeNote.secret),
-          amount: BigInt(exactFeeNote.amount),
-          tokenMint: getCorrectTokenMint(exactFeeNote), // Use correct mint, not corrupted stored value
-          blinding: BigInt(exactFeeNote.blinding),
-          rho: BigInt(exactFeeNote.rho),
-          commitment: BigInt(exactFeeNote.commitment),
-          nullifier: BigInt(exactFeeNote.nullifier),
-        };
-        
-        const nocMint = new PublicKey(NOC_TOKEN_MINT);
-        const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
-        const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner, false);
-        
-        const feeWitness = serializeWithdrawWitness({
-          inputNote: feeInputNote,
-          merkleProof: feeMerkleProof,
-          receiver: pubkeyToField(feeCollectorOwner),
-        });
-        
-        setStatus('Generating fee proof...');
-        const feeProof = await proveCircuit('withdraw', feeWitness);
-        
-        try {
-          const feeRes = await relayWithdraw({
-            proof: feeProof,
-            amount: exactFeeNote.amount,
-            nullifier: exactFeeNote.nullifier,
-            recipient: feeCollectorOwner.toBase58(),
-            recipientAta: feeCollectorAta.toBase58(),
-            mint: nocMint.toBase58(),
-            collectFee: false,
-          });
-          console.log('[Transfer] ✅ Fee collected (0.25 NOC):', feeRes.signature);
-          markNoteSpent(exactFeeNote.nullifier);
-        } catch (feeErr) {
-          console.error('[Transfer] Fee collection failed:', feeErr);
-          throw new Error('Failed to collect privacy fee. Please try again.');
+          try {
+            const feeRes = await relayWithdraw({
+              proof: feeProof,
+              amount: exactFeeNote.amount,
+              nullifier: exactFeeNote.nullifier,
+              recipient: feeCollectorOwner.toBase58(),
+              recipientAta: feeCollectorAta.toBase58(),
+              mint: nocMint.toBase58(),
+              collectFee: false,
+            });
+            console.log('[Transfer] ✅ Fee collected (0.25 NOC):', feeRes.signature);
+            markNoteSpent(exactFeeNote.nullifier);
+          } catch (feeErr) {
+            console.error('[Transfer] Fee collection failed:', feeErr);
+            throw new Error('Failed to collect privacy fee. Please try again.');
+          }
+        } else {
+          // NOC transfer - fee is already included in the change (deducted during preparation)
+          console.log('[Transfer] NOC transfer - fee already deducted from change, no separate fee collection needed');
         }
         
         // Now generate transfer proof
