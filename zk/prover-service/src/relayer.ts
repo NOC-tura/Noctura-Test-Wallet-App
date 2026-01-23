@@ -83,11 +83,16 @@ function getIDL() {
   // Try multiple paths
   const paths = [
     resolve(process.cwd(), '..', '..', 'target', 'idl', 'noctura_shield.json'),
+    resolve(process.cwd(), '..', 'target', 'idl', 'noctura_shield.json'),
     resolve(process.cwd(), 'target', 'idl', 'noctura_shield.json'),
+    resolve(__dirname, '..', '..', 'target', 'idl', 'noctura_shield.json'),
     '/Users/banel/Noctura-Wallet/target/idl/noctura_shield.json',
   ];
   
+  console.log('[Relayer] Looking for IDL, cwd:', process.cwd());
+  
   for (const p of paths) {
+    console.log('[Relayer] Checking IDL path:', p, 'exists:', existsSync(p));
     if (existsSync(p)) {
       try {
         _idl = JSON.parse(readFileSync(p, 'utf-8'));

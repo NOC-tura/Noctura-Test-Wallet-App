@@ -34,6 +34,10 @@ cp -r /tmp/zk-artifacts/withdraw_js ../build/withdraw/
 cp -r /tmp/zk-artifacts/transfer-multi_js ../build/transfer-multi/
 cp -r /tmp/zk-artifacts/partial_withdraw_js ../build/partial_withdraw/
 
+# Copy IDL for relayer
+mkdir -p ../../target/idl
+cp /tmp/zk-artifacts/noctura_shield.json ../../target/idl/
+
 # Cleanup
 rm -rf /tmp/zk-artifacts /tmp/zk-artifacts.zip
 
