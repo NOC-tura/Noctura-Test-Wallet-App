@@ -2145,9 +2145,17 @@ export default function App() {
           console.log('[Transfer] Created recipient note with commitment:', recipientNote.commitment.toString().slice(0, 20));
           
           // Create change note back to sender
-          const changeAmount = noteAmount - totalNeeded;
+          // For NOC transfers: fee is deducted from change (input = recipient + change + fee)
+          // For SOL transfers: fee is collected separately from NOC balance
+          const feeDeductedFromChange = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
+          const changeAmount = noteAmount - atoms - feeDeductedFromChange;
+          
+          if (changeAmount < 0n) {
+            throw new Error(`Insufficient ${tokenType} for transfer plus fee. Have ${Number(noteAmount) / 1e6}, need ${Number(atoms + feeDeductedFromChange) / 1e6}`);
+          }
+          
           const changeNote = createNoteFromSecrets(changeAmount, tokenType);
-          console.log('[Transfer] Created change note:', Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType);
+          console.log('[Transfer] Created change note:', Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType, tokenType === 'NOC' ? '(fee deducted from change)' : '');
           
           // Store pending shielded-to-shielded transfer data for confirmation
           (window as unknown as Record<string, unknown>).__pendingTransfer = {
@@ -2172,15 +2180,16 @@ export default function App() {
             recipient: trimmedRecipient,
             amount: parsedAmount,
             atoms,
-            feeNoc: tokenType === 'NOC' ? 0.25 : 0.25, // Privacy fee
+            feeNoc: 0.25, // Privacy fee (for NOC: deducted from change, for SOL: separate withdrawal)
             isPartialSpend: changeAmount > 0n,
             changeAmount: changeAmount > 0n ? Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6) : undefined,
             tokenType,
             isFullyPrivate: true, // Shielded-to-shielded is always fully private
           });
           
+          const feeNote = tokenType === 'NOC' ? ' (0.25 NOC fee deducted from change)' : '';
           const changeMsg = changeAmount > 0n 
-            ? ` Change: ${(Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6)).toFixed(tokenType === 'SOL' ? 9 : 6)} ${tokenType} stays shielded.`
+            ? ` Change: ${(Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6)).toFixed(tokenType === 'SOL' ? 9 : 6)} ${tokenType} stays shielded.${feeNote}`
             : '';
           setStatus(`Review: Full privacy transfer of ${parsedAmount} ${tokenType}.${changeMsg}`);
           setShieldedSendPending(false); // Ready for user to confirm
