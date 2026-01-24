@@ -10,7 +10,8 @@ template Deposit() {
     signal input blinding;
     signal input expectedCommitment;
 
-    component poseidon = Poseidon(4);
+// deposit.circom placeholder
+// Replace with actual circuit code
     poseidon.inputs[0] <== secret;
     poseidon.inputs[1] <== amount;
     poseidon.inputs[2] <== tokenMint;

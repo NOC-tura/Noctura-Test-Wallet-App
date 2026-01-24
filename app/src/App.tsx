@@ -2302,9 +2302,9 @@ export default function App() {
           console.log('[Transfer] Created recipient note with commitment:', recipientNote.commitment.toString().slice(0, 20));
 
           // Create change note
-          const changeAmount = noteAmount - atoms - feeDeductedFromChange;
+          const changeAmount = noteAmount - atoms;
           if (changeAmount < 0n) {
-            throw new Error(`Insufficient ${tokenType} for transfer plus fee. Have ${Number(noteAmount) / 1e6}, need ${Number(atoms + feeDeductedFromChange) / 1e6}`);
+            throw new Error(`Insufficient ${tokenType} for transfer. Have ${Number(noteAmount) / 1e6}, need ${Number(atoms) / 1e6}`);
           }
           const changeNote = createNoteFromSecrets(changeAmount, tokenType);
           console.log('[Transfer] Created change note:', Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType, tokenType === 'NOC' ? '(fee deducted from change)' : '');
