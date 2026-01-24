@@ -36,6 +36,9 @@ export const ProverServiceUrl = buildTimeProver && buildTimeProver.startsWith('h
 
 export const INITIAL_AIRDROP_AMOUNT = 10_000;
 
+// Relayer/Fee collector address - receives network fees and privacy fees
+export const RELAYER_ADDRESS = '55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax';
+
 // Relayer endpoints for failover (comma-separated; parsed from env or config)
 export const RELAYER_ENDPOINTS = (() => {
   const env = readEnv('VITE_RELAYER_ENDPOINTS', '');

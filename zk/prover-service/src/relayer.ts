@@ -190,6 +190,13 @@ export interface RelayWithdrawParams {
   recipientAta: string; // PublicKey as string
   mint?: string; // Optional mint, defaults to NOC
   collectFee?: boolean; // If true, adds 0.25 NOC fee and sends to fee collector
+  // SOL fee parameters for shielded-to-transparent withdrawals (user pays network fee)
+  solFeeProof?: {
+    proofBytes: string;
+    publicInputs: string[];
+  };
+  solFeeNullifier?: string; // Nullifier for the SOL fee note
+  solFeeAmount?: string; // Amount of SOL (in lamports) to withdraw for fees
 }
 
 export interface RelayTransferParams {
@@ -231,7 +238,7 @@ export async function relayWithdraw(
     throw new Error('IDL not loaded - cannot relay transactions');
   }
 
-  const { proof, amount, nullifier, recipient, recipientAta, mint: mintStr, collectFee } = params;
+  const { proof, amount, nullifier, recipient, recipientAta, mint: mintStr, collectFee, solFeeProof, solFeeNullifier, solFeeAmount } = params;
   const mint = mintStr ? new PublicKey(mintStr) : NOC_MINT;
   
   // Check if this is a native SOL withdrawal (WSOL mint)
@@ -240,6 +247,60 @@ export async function relayWithdraw(
   if (isNativeSOL) {
     console.log('[Relayer] Detected native SOL withdrawal');
     return relayWithdrawSol(connection, relayerKeypair, params, feeCollector);
+  }
+  
+  // Handle SOL fee collection for shielded-to-transparent withdrawals
+  // This withdraws SOL from user's shielded balance to the relayer to pay for network fees
+  if (solFeeProof && solFeeNullifier && solFeeAmount) {
+    console.log('[Relayer] Collecting SOL fee from user shielded balance for network fees...');
+    console.log('[Relayer] SOL fee amount (lamports):', solFeeAmount);
+    
+    const solFeePdas = deriveShieldPdas(NOC_MINT); // Use NOC for common PDAs
+    const solVault = deriveSolVault();
+    
+    const solFeeProofBytes = base64ToBytes(solFeeProof.proofBytes);
+    const solFeePublicInputs = solFeeProof.publicInputs.map((entry) => Array.from(base64ToBytes(entry)) as [number, ...number[]]);
+    const solFeeNullifierBytes = bigIntToBytesLE(BigInt(solFeeNullifier));
+    const solFeeAmountBn = new BN(solFeeAmount);
+    
+    // Create Anchor provider with relayer as the wallet
+    const wallet = {
+      publicKey: relayerKeypair.publicKey,
+      signTransaction: async (tx: Transaction) => {
+        tx.sign(relayerKeypair);
+        return tx;
+      },
+      signAllTransactions: async (txs: Transaction[]) => {
+        txs.forEach(tx => tx.sign(relayerKeypair));
+        return txs;
+      },
+    };
+    
+    const provider = new anchor.AnchorProvider(connection, wallet as any, {
+      commitment: 'confirmed',
+    });
+    const program = new Program(IDL, PROGRAM_ID, provider);
+    
+    // Withdraw SOL fee to relayer's address
+    const solFeeWithdrawIx = await program.methods
+      .transparentWithdrawSol(solFeeAmountBn, Buffer.from(solFeeProofBytes), solFeePublicInputs, solFeeNullifierBytes)
+      .accounts({
+        globalState: solFeePdas.globalState,
+        nullifierSet: solFeePdas.nullifierSet,
+        withdrawVerifier: solFeePdas.withdrawVerifier,
+        solVault: solVault,
+        recipient: relayerKeypair.publicKey, // SOL goes to relayer to pay for tx
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    
+    const computeBudgetIxFee = ComputeBudgetProgram.setComputeUnitLimit({
+      units: COMPUTE_UNITS_FOR_ZK,
+    });
+    
+    const solFeeTx = new Transaction().add(computeBudgetIxFee).add(solFeeWithdrawIx);
+    const solFeeSig = await sendAndConfirmTx(connection, solFeeTx, [relayerKeypair], 'SOL fee collection from shielded');
+    console.log('[Relayer] ✅ SOL fee collected from user shielded balance:', solFeeSig);
   }
   
   const pdas = deriveShieldPdas(mint);
@@ -444,6 +505,7 @@ export async function relayWithdraw(
  * Submit a native SOL withdrawal via the relayer.
  * Native SOL uses a separate vault (sol-vault PDA) and SystemProgram transfers.
  * The fee is collected separately in NOC tokens.
+ * If solFeeProof is provided, SOL is first withdrawn from user's shielded balance to pay network fees.
  */
 async function relayWithdrawSol(
   connection: Connection,
@@ -456,8 +518,60 @@ async function relayWithdrawSol(
     throw new Error('IDL not loaded - cannot relay SOL transactions');
   }
 
-  const { proof, amount, nullifier, recipient } = params;
+  const { proof, amount, nullifier, recipient, solFeeProof, solFeeNullifier, solFeeAmount } = params;
   const recipientPubkey = new PublicKey(recipient);
+  
+  // Handle SOL fee collection for shielded-to-transparent withdrawals
+  // This withdraws additional SOL from user's shielded balance to the relayer to pay for network fees
+  if (solFeeProof && solFeeNullifier && solFeeAmount) {
+    console.log('[Relayer] Collecting SOL fee from user shielded balance for network fees (SOL withdrawal)...');
+    console.log('[Relayer] SOL fee amount (lamports):', solFeeAmount);
+    
+    const solFeePdas = deriveShieldPdas(NOC_MINT);
+    const solVault = deriveSolVault();
+    
+    const solFeeProofBytes = base64ToBytes(solFeeProof.proofBytes);
+    const solFeePublicInputs = solFeeProof.publicInputs.map((entry) => Array.from(base64ToBytes(entry)) as [number, ...number[]]);
+    const solFeeNullifierBytes = bigIntToBytesLE(BigInt(solFeeNullifier));
+    const solFeeAmountBn = new BN(solFeeAmount);
+    
+    const wallet = {
+      publicKey: relayerKeypair.publicKey,
+      signTransaction: async (tx: Transaction) => {
+        tx.sign(relayerKeypair);
+        return tx;
+      },
+      signAllTransactions: async (txs: Transaction[]) => {
+        txs.forEach(tx => tx.sign(relayerKeypair));
+        return txs;
+      },
+    };
+    
+    const provider = new anchor.AnchorProvider(connection, wallet as any, {
+      commitment: 'confirmed',
+    });
+    const program = new Program(IDL, PROGRAM_ID, provider);
+    
+    const solFeeWithdrawIx = await program.methods
+      .transparentWithdrawSol(solFeeAmountBn, Buffer.from(solFeeProofBytes), solFeePublicInputs, solFeeNullifierBytes)
+      .accounts({
+        globalState: solFeePdas.globalState,
+        nullifierSet: solFeePdas.nullifierSet,
+        withdrawVerifier: solFeePdas.withdrawVerifier,
+        solVault: solVault,
+        recipient: relayerKeypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    
+    const computeBudgetIxFee = ComputeBudgetProgram.setComputeUnitLimit({
+      units: COMPUTE_UNITS_FOR_ZK,
+    });
+    
+    const solFeeTx = new Transaction().add(computeBudgetIxFee).add(solFeeWithdrawIx);
+    const solFeeSig = await sendAndConfirmTx(connection, solFeeTx, [relayerKeypair], 'SOL fee collection from shielded (SOL withdrawal)');
+    console.log('[Relayer] ✅ SOL fee collected from user shielded balance:', solFeeSig);
+  }
   
   // Parse amount (in lamports)
   const recipientAmount = BigInt(amount);

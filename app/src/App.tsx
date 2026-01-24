@@ -34,7 +34,7 @@ import { serializeTransferMultiWitness } from '@zk-witness/builders/transfer-mul
 import { serializeConsolidateWitness } from '@zk-witness/builders/consolidate';
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from './types/shield';
-import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl, RELAYER_ENDPOINTS } from './lib/constants';
+import { INITIAL_AIRDROP_AMOUNT, NOC_TOKEN_MINT, WSOL_MINT, ProverServiceUrl, RELAYER_ENDPOINTS, RELAYER_ADDRESS } from './lib/constants';
 import { initializePrivateRelayer, getPrivateRelayer } from './lib/privateRelayer';
 import { getObfuscatedFeeCollector } from './lib/feeObfuscation';
 import { getTimingPrivacyManager } from './lib/timingPrivacy';
@@ -44,6 +44,9 @@ import { buildConsolidationWitness, partitionNotesForConsolidation } from './lib
 const NOC_ATOMS = 1_000_000;
 const SHIELDED_PRIVACY_FEE_NOC = 0.25; // Flat 0.25 NOC fee for ALL shielded transactions (deposits + withdrawals)
 const DEFAULT_SOL_FEE = 0.000005;
+// SOL fee from shielded balance for shielded-to-transparent withdrawals (covers ZK proof verification)
+// This is higher than regular tx fees because we need to cover compute budget + confirmation
+const SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS = 5_000_000n; // 0.005 SOL
 const SOLANA_CLUSTER = import.meta.env?.VITE_SOLANA_CLUSTER || 'devnet';
 
 // Helper to get the correct tokenMint for a note (handles legacy corrupted values)
@@ -150,6 +153,154 @@ async function computeZkHash(recipient: string, tokenType: 'NOC' | 'SOL', amount
   const mint = new PublicKey(tokenType === 'SOL' ? WSOL_MINT : NOC_TOKEN_MINT).toBytes();
   const randomness = generateSecureRandomness();
   return generateZKHashDisplay(recipientPk, mint, amount, randomness);
+}
+
+/**
+ * Prepare SOL fee proof for shielded-to-transparent withdrawals.
+ * This finds a SOL note, splits it if needed, and generates a withdrawal proof.
+ * The SOL is withdrawn to the relayer to pay for the transaction network fees.
+ * 
+ * @returns Object with solFeeProof, solFeeNullifier, solFeeAmount, or null if user has no shielded SOL
+ */
+async function prepareSolFeeForWithdrawal(
+  shieldedNotes: ShieldedNoteRecord[],
+  walletAddress: string,
+  relayerAddress: string,
+  setStatus: (s: string) => void,
+  markNoteSpent: (nullifier: string) => void,
+  addShieldedNote: (note: ShieldedNoteRecord) => void,
+  ownerPubkey: PublicKey,
+): Promise<{
+  solFeeProof: ProverResponse;
+  solFeeNullifier: string;
+  solFeeAmount: string;
+  feeNoteRecord: ShieldedNoteRecord;
+} | null> {
+  // Find SOL notes
+  const solNotes = shieldedNotes.filter(n => 
+    !n.spent && 
+    n.owner === walletAddress && 
+    n.tokenType === 'SOL'
+  );
+  
+  const totalSolAvailable = solNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+  
+  if (totalSolAvailable < SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS) {
+    console.log('[SOL Fee] Insufficient shielded SOL for network fee. User has:', totalSolAvailable.toString(), 'lamports, need:', SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS.toString());
+    // Return null - relayer will pay (legacy behavior) or user needs to shield SOL first
+    return null;
+  }
+  
+  console.log('[SOL Fee] Preparing SOL fee for shielded-to-transparent withdrawal...');
+  console.log('[SOL Fee] Total shielded SOL available:', Number(totalSolAvailable) / 1e9, 'SOL');
+  
+  // Look for an EXACT fee note
+  let feeNote = solNotes.find(n => BigInt(n.amount) === SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS);
+  
+  if (!feeNote) {
+    // Need to split a larger note
+    console.log('[SOL Fee] No exact 0.005 SOL fee note found - creating one via split...');
+    
+    const splittableNote = solNotes.find(n => BigInt(n.amount) > SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS);
+    if (!splittableNote) {
+      console.log('[SOL Fee] No single SOL note large enough to split for fee');
+      return null;
+    }
+    
+    console.log('[SOL Fee] Splitting SOL note:', Number(BigInt(splittableNote.amount)) / 1e9, 'SOL');
+    
+    // Build merkle proof for the splittable note
+    const allUnspent = shieldedNotes.filter(n => n.owner === walletAddress && !n.spent);
+    const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
+    
+    const splitInputNote: Note = {
+      secret: BigInt(splittableNote.secret),
+      amount: BigInt(splittableNote.amount),
+      tokenMint: 1n, // SOL uses tokenMint = 1
+      blinding: BigInt(splittableNote.blinding),
+      rho: BigInt(splittableNote.rho),
+      commitment: BigInt(splittableNote.commitment),
+      nullifier: BigInt(splittableNote.nullifier),
+    };
+    
+    // Create fee note (0.005 SOL) + change note (rest)
+    const newFeeNote = createNoteFromSecrets(SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS, 'SOL');
+    const splitChangeAmount = BigInt(splittableNote.amount) - SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS;
+    const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'SOL');
+    
+    const splitWitness = serializeTransferWitness({
+      inputNote: splitInputNote,
+      merkleProof: splitMerkleProof,
+      outputNote1: newFeeNote,
+      outputNote2: splitChangeNote,
+    });
+    
+    setStatus('Preparing SOL fee note for network costs...');
+    console.log('[SOL Fee] Generating proof to split SOL note for fee...');
+    const splitProof = await proveCircuit('transfer', splitWitness);
+    
+    const splitResult = await relayTransfer({
+      proof: splitProof,
+      nullifier: splittableNote.nullifier,
+      outputCommitment1: newFeeNote.commitment.toString(),
+      outputCommitment2: splitChangeNote.commitment.toString(),
+    });
+    
+    console.log('[SOL Fee] ✅ Created exact 0.005 SOL fee note:', splitResult.signature);
+    
+    // Mark old note as spent and save new notes
+    markNoteSpent(splittableNote.nullifier);
+    
+    const feeNoteRecord = snapshotNote(newFeeNote, ownerPubkey, 'SOL', { signature: splitResult.signature });
+    const changeNoteRecord = snapshotNote(splitChangeNote, ownerPubkey, 'SOL', { signature: splitResult.signature });
+    addShieldedNote(feeNoteRecord);
+    addShieldedNote(changeNoteRecord);
+    
+    feeNote = feeNoteRecord;
+    
+    // Small delay to let state update
+    await new Promise(r => setTimeout(r, 200));
+  }
+  
+  // Now we have an exact fee note - generate withdrawal proof
+  console.log('[SOL Fee] Using exact 0.005 SOL fee note for withdrawal');
+  
+  // Refresh note list to include newly split notes
+  const currentNotes = useShieldedNotes.getState().notes.filter(
+    n => n.owner === walletAddress && !n.spent
+  );
+  const feeMerkleProof = buildMerkleProof(currentNotes, feeNote);
+  
+  const feeInputNote: Note = {
+    secret: BigInt(feeNote.secret),
+    amount: BigInt(feeNote.amount),
+    tokenMint: 1n, // SOL uses tokenMint = 1
+    blinding: BigInt(feeNote.blinding),
+    rho: BigInt(feeNote.rho),
+    commitment: BigInt(feeNote.commitment),
+    nullifier: BigInt(feeNote.nullifier),
+  };
+  
+  // Withdraw to relayer address to pay for tx fees
+  const relayerPubkey = new PublicKey(relayerAddress);
+  
+  const feeWitness = serializeWithdrawWitness({
+    inputNote: feeInputNote,
+    merkleProof: feeMerkleProof,
+    receiver: pubkeyToField(relayerPubkey),
+  });
+  
+  setStatus('Generating SOL fee withdrawal proof...');
+  const solFeeProof = await proveCircuit('withdraw', feeWitness);
+  
+  console.log('[SOL Fee] ✅ SOL fee proof generated');
+  
+  return {
+    solFeeProof,
+    solFeeNullifier: feeNote.nullifier,
+    solFeeAmount: feeNote.amount,
+    feeNoteRecord: feeNote,
+  };
 }
 
 type ShieldedTransferReview = {
@@ -3445,6 +3596,22 @@ export default function App() {
         const recipientAta = getAssociatedTokenAddressSync(mintKey, recipientKey, true).toBase58();
         
         if (tokenType === 'NOC') {
+          // Prepare SOL fee for shielded-to-transparent withdrawal
+          let solFeeData: { solFeeProof: ProverResponse; solFeeNullifier: string; solFeeAmount: string; feeNoteRecord: ShieldedNoteRecord } | null = null;
+          try {
+            solFeeData = await prepareSolFeeForWithdrawal(
+              shieldedNotes,
+              keypair.publicKey.toBase58(),
+              RELAYER_ADDRESS,
+              setStatus,
+              markNoteSpent,
+              addShieldedNote,
+              keypair.publicKey,
+            );
+          } catch (feeErr) {
+            console.warn('[SequentialConsolidate] Failed to prepare SOL fee:', feeErr);
+          }
+          
           const res = await relayWithdraw({
             proof: withdrawProof,
             amount: pendingTransfer.targetAmount!.toString(),
@@ -3453,8 +3620,18 @@ export default function App() {
             recipientAta,
             mint: mintKey.toBase58(),
             collectFee: true, // Collect 0.25 NOC fee from vault
+            ...(solFeeData ? {
+              solFeeProof: solFeeData.solFeeProof,
+              solFeeNullifier: solFeeData.solFeeNullifier,
+              solFeeAmount: solFeeData.solFeeAmount,
+            } : {}),
           });
           console.log('[SequentialConsolidate] Withdrawal succeeded:', res.signature);
+          
+          // Mark SOL fee note as spent if used
+          if (solFeeData) {
+            markNoteSpent(solFeeData.feeNoteRecord.nullifier);
+          }
           
           // Record the transaction
           addTransaction({
@@ -3544,6 +3721,22 @@ export default function App() {
           console.log('[AutoConsolidate] Step 2: Withdrawing', Number(pendingTransfer.atoms) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType);
           
           if (tokenType === 'NOC') {
+            // Prepare SOL fee for shielded-to-transparent withdrawal
+            let solFeeData: { solFeeProof: ProverResponse; solFeeNullifier: string; solFeeAmount: string; feeNoteRecord: ShieldedNoteRecord } | null = null;
+            try {
+              solFeeData = await prepareSolFeeForWithdrawal(
+                shieldedNotes,
+                keypair.publicKey.toBase58(),
+                RELAYER_ADDRESS,
+                setStatus,
+                markNoteSpent,
+                addShieldedNote,
+                keypair.publicKey,
+              );
+            } catch (feeErr) {
+              console.warn('[AutoConsolidate] Failed to prepare SOL fee:', feeErr);
+            }
+            
             const nocMint = new PublicKey(NOC_TOKEN_MINT);
             const res = await relayWithdraw({
               proof: pendingTransfer.withdrawProof,
@@ -3553,9 +3746,19 @@ export default function App() {
               recipientAta: pendingTransfer.recipientAta!,
               mint: nocMint.toBase58(),
               collectFee: true, // Collect 0.25 NOC from vault
+              ...(solFeeData ? {
+                solFeeProof: solFeeData.solFeeProof,
+                solFeeNullifier: solFeeData.solFeeNullifier,
+                solFeeAmount: solFeeData.solFeeAmount,
+              } : {}),
             });
             console.log('[AutoConsolidate] Withdrawal succeeded:', res.signature);
             markNoteSpent(pendingTransfer.consolidatedNote.nullifier.toString());
+            
+            // Mark SOL fee note as spent if used
+            if (solFeeData) {
+              markNoteSpent(solFeeData.feeNoteRecord.nullifier);
+            }
             
             // Record the transaction
             addTransaction({
@@ -3814,6 +4017,28 @@ export default function App() {
             if (tokenType === 'NOC') {
               // Withdraw via relayer so the user key never appears on-chain; relayer also collects fee FROM VAULT
               console.log('[Transfer] Calling relayWithdraw (vault) for recipient:', pendingTransfer.recipientKey!.slice(0, 8));
+              
+              // Prepare SOL fee for shielded-to-transparent withdrawal (user pays network fees from shielded SOL)
+              let solFeeData: { solFeeProof: ProverResponse; solFeeNullifier: string; solFeeAmount: string; feeNoteRecord: ShieldedNoteRecord } | null = null;
+              try {
+                solFeeData = await prepareSolFeeForWithdrawal(
+                  shieldedNotes,
+                  keypair.publicKey.toBase58(),
+                  RELAYER_ADDRESS,
+                  setStatus,
+                  markNoteSpent,
+                  addShieldedNote,
+                  keypair.publicKey,
+                );
+                if (solFeeData) {
+                  console.log('[Transfer] SOL fee proof prepared, amount:', Number(BigInt(solFeeData.solFeeAmount)) / 1e9, 'SOL');
+                } else {
+                  console.log('[Transfer] No shielded SOL available - relayer will pay network fee (legacy mode)');
+                }
+              } catch (feeErr) {
+                console.warn('[Transfer] Failed to prepare SOL fee, continuing without (relayer pays):', feeErr);
+              }
+              
               let withdrawSig: string;
               try {
                 const res = await relayWithdraw({
@@ -3824,8 +4049,19 @@ export default function App() {
                   recipientAta,
                   mint: ataMintKeyPartial.toBase58(),
                   collectFee: true, // Collect 0.25 NOC from shielded vault, not transparent balance
+                  // Include SOL fee proof if available
+                  ...(solFeeData ? {
+                    solFeeProof: solFeeData.solFeeProof,
+                    solFeeNullifier: solFeeData.solFeeNullifier,
+                    solFeeAmount: solFeeData.solFeeAmount,
+                  } : {}),
                 });
                 withdrawSig = res.signature;
+                
+                // Mark SOL fee note as spent if used
+                if (solFeeData) {
+                  markNoteSpent(solFeeData.feeNoteRecord.nullifier);
+                }
               } catch (relayErr) {
                 console.error('[Transfer] ❌ Relayer unavailable for NOC withdrawal:', relayErr);
                 setStatus('Relayer unavailable. Shielded NOC withdrawal blocked to avoid exposing signer. Please retry.');
@@ -4102,6 +4338,22 @@ export default function App() {
               throw new Error('Missing withdrawal proof or note');
             }
             
+            // Prepare SOL fee for shielded-to-transparent withdrawal
+            let solFeeData: { solFeeProof: ProverResponse; solFeeNullifier: string; solFeeAmount: string; feeNoteRecord: ShieldedNoteRecord } | null = null;
+            try {
+              solFeeData = await prepareSolFeeForWithdrawal(
+                shieldedNotes,
+                keypair.publicKey.toBase58(),
+                RELAYER_ADDRESS,
+                setStatus,
+                markNoteSpent,
+                addShieldedNote,
+                keypair.publicKey,
+              );
+            } catch (feeErr) {
+              console.warn('[Transfer] Failed to prepare SOL fee:', feeErr);
+            }
+            
             let signature: string;
             try {
               const res = await relayWithdraw({
@@ -4112,8 +4364,18 @@ export default function App() {
                 recipientAta: pendingRecipientAta!,
                 mint: mintKey.toBase58(),
                 collectFee: true, // Collect 0.25 NOC from shielded vault, not transparent ATA
+                ...(solFeeData ? {
+                  solFeeProof: solFeeData.solFeeProof,
+                  solFeeNullifier: solFeeData.solFeeNullifier,
+                  solFeeAmount: solFeeData.solFeeAmount,
+                } : {}),
               });
               signature = res.signature;
+              
+              // Mark SOL fee note as spent if used
+              if (solFeeData) {
+                markNoteSpent(solFeeData.feeNoteRecord.nullifier);
+              }
             } catch (relayErr) {
               console.error('[Transfer] ❌ Relayer unavailable for NOC withdrawal:', relayErr);
               setStatus('Relayer unavailable. Shielded NOC withdrawal blocked to avoid exposing signer. Please retry.');

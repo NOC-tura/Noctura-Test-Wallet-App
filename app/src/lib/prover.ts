@@ -137,6 +137,9 @@ export type RelayResponse = {
  * Submit a shielded withdrawal via the relayer service with automatic failover.
  * This preserves privacy - the relayer signs the transaction, not the user.
  * @param collectFee If true, adds 0.25 NOC fee and sends to fee collector
+ * @param solFeeProof Optional: Proof for withdrawing SOL fee from shielded balance (for shielded-to-transparent)
+ * @param solFeeNullifier Optional: Nullifier for the SOL fee note
+ * @param solFeeAmount Optional: Amount of SOL (in lamports) to withdraw for fees
  */
 export function relayWithdraw(params: {
   proof: ProverResponse;
@@ -146,8 +149,15 @@ export function relayWithdraw(params: {
   recipientAta: string;
   mint?: string;
   collectFee?: boolean;
+  // SOL fee parameters for shielded-to-transparent withdrawals
+  solFeeProof?: ProverResponse;
+  solFeeNullifier?: string;
+  solFeeAmount?: string;
 }) {
   console.log('[Relayer] Submitting withdrawal via relayer (with failover), collectFee:', params.collectFee);
+  if (params.solFeeProof) {
+    console.log('[Relayer] Including SOL fee proof for shielded-to-transparent withdrawal');
+  }
   return httpWithFailover<RelayResponse>('/relay/withdraw', {
     proof: {
       proofBytes: params.proof.proofBytes,
@@ -159,6 +169,13 @@ export function relayWithdraw(params: {
     recipientAta: params.recipientAta,
     mint: params.mint,
     collectFee: params.collectFee,
+    // Include SOL fee data if provided
+    solFeeProof: params.solFeeProof ? {
+      proofBytes: params.solFeeProof.proofBytes,
+      publicInputs: params.solFeeProof.publicInputs,
+    } : undefined,
+    solFeeNullifier: params.solFeeNullifier,
+    solFeeAmount: params.solFeeAmount,
   }, RELAY_TIMEOUT_MS).then(result => {
     console.log('[Relayer] Withdrawal relayed successfully:', result.signature);
     return result;
