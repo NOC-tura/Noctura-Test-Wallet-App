@@ -4220,16 +4220,25 @@ export default function App() {
                   nullifier: n.nullifier.slice(0, 10),
                 })));
                 
-                // Find a NOC note large enough to split
-                const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
-                
-                if (!splittableNote) {
-                  throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available.');
-                }
-                
-                console.log('[Transfer] Splitting note:', Number(BigInt(splittableNote.amount)) / 1e6, 'NOC');
-                
-                // Create fee note via self-transfer (split the note)
+                // Now generate transfer proof
+                setStatus('Generating zero-knowledge proof for private transfer…');
+
+                // Log all witness fields for debugging
+                console.log('[DEBUG] Shielded-to-shielded transfer witness fields:');
+                console.log('inputNote:', inputNote);
+                console.log('recipientNote:', recipientNote);
+                console.log('changeNote:', changeNote);
+                console.log('merkleProof:', merkleProof);
+
+                // Serialize transfer witness
+                const transferWitness = serializeTransferWitness({
+                  inputNote,
+                  merkleProof,
+                  outputNote1: recipientNote,
+                  outputNote2: changeNote,
+                });
+                console.log('[DEBUG] Serialized transferWitness:', transferWitness);
+                const proof = await proveCircuit('transfer', transferWitness);
                 const allUnspent = useShieldedNotes.getState().notes.filter(
                   n => n.owner === walletAddress && !n.spent
                 );
