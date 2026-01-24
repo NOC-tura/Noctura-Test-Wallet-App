@@ -2872,51 +2872,37 @@ export default function App() {
           const recipientNote = createNoteFromSecrets(recipientNoteAmount, tokenType);
           console.log('[Transfer] Recipient note created');
           
-          console.log('[Transfer] Serializing transfer witness...');
-          const transferWitness = serializeTransferWitness({
-            inputNote,
-            merkleProof,
-            outputNote1: recipientNote,
-            outputNote2: changeNote,
-          });
-          console.log('[Transfer] Transfer witness serialized:', Object.keys(transferWitness));
-          
-          setStatus('Generating split proof for partial spend…');
-          console.log('[Transfer] Calling proveCircuit(transfer)...');
-          const proof = await proveCircuit('transfer', transferWitness);
-          console.log('[Transfer] Proof received!');
-          logProofPayload('transfer-split', {
-            inputNullifier: spendNote.nullifier,
-            merkleRoot: merkleProof.root.toString(),
-            outputCommitment1: recipientNote.commitment.toString(),
-            outputCommitment2: changeNote.commitment.toString(),
-            publicInputs: proof.publicInputs,
-            proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
-          });
+          // DEFERRED PROOF: Store witness data for generating proof AFTER user confirms
+          // This makes the UI responsive - popup appears immediately
+          console.log('[Transfer] Storing witness data for deferred proof generation...');
           
           const recipientAta = getAssociatedTokenAddressSync(ataMintKey, recipientKey, true).toBase58();
-          
-          // Store state for the two-step process
-          setPendingWithdrawalProof(proof);
-          setPendingWithdrawalNote(spendNote);
-          setPendingRecipient(recipientKey.toBase58());
-          setPendingRecipientAta(recipientAta);
           
           // Encode recipient note for sharing
           const sharedNote = encodeSharedNote(recipientNote, tokenType);
           
+          // Store ALL data needed for deferred proof generation
           (window as unknown as Record<string, unknown>).__pendingTransfer = {
             isPartial: true,
+            isDeferredProof: true, // Flag for deferred proof generation
+            // Data for proof generation
+            inputNote,
+            merkleProof,
             recipientNote,
             changeNote,
+            spendNote,
+            // Data for transaction
             recipientKey: recipientKey.toBase58(),
             recipientAta,
             atoms,
             feeAtoms: PRIVACY_FEE_ATOMS.toString(),
+            tokenType,
+            parsedAmount,
+            changeAmount,
+            decimals,
           };
           
-          console.log('[Transfer] Opening review modal (partial spend)');
-          console.log('[Transfer] Opening review modal (partial spend)');
+          console.log('[Transfer] Opening review modal IMMEDIATELY (partial spend, proof deferred)');
           const recipientZkHash = await computeZkHash(trimmedRecipient, tokenType, atoms);
 
           setTransferReview({
@@ -2932,10 +2918,12 @@ export default function App() {
             transparentPayout,
             isFullyPrivate: trimmedRecipient.startsWith('noctura1'),
           });
+          setShieldedSendPending(false); // Ready for user to confirm
           const changeMsg = changeAmount > 0n 
             ? ` Change: ${(Number(changeAmount) / Math.pow(10, decimals)).toFixed(decimals === 9 ? 9 : 6)} ${tokenType} stays shielded.`
             : '';
           setStatus(`Review: Sending ${parsedAmount} ${tokenType} to recipient (privacy fee 0.25 NOC).${changeMsg} ALL FUNDS FROM SHIELDED BALANCE.`);
+          return; // Exit early - wait for user confirmation
         } else {
           // Full spend: use withdraw circuit
           // For full spend, privacy fee MUST still be deducted
@@ -2991,24 +2979,10 @@ export default function App() {
             transparentBalanceUntouched: true,
           });
           
-          console.log('[Transfer] Full spend - using withdraw circuit');
-          const witness = serializeWithdrawWitness({
-            inputNote,
-            merkleProof,
-            receiver: pubkeyToField(recipientKey),
-          });
-          console.log('[Transfer] Withdraw witness serialized');
-          setStatus('Generating shielded proof…');
-          console.log('[Transfer] Calling proveCircuit(withdraw)...');
-          const proof = await proveCircuit('withdraw', witness);
-          console.log('[Transfer] Withdraw proof received!');
-          logProofPayload('withdraw', {
-            inputNullifier: spendNote.nullifier,
-            merkleRoot: merkleProof.root.toString(),
-            publicInputs: proof.publicInputs,
-            proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
-            receiver: recipientKey.toBase58(),
-          });
+          // DEFERRED PROOF: Store witness data for generating proof AFTER user confirms
+          // This makes the UI responsive - popup appears immediately
+          console.log('[Transfer] Full spend - storing data for deferred proof generation');
+          
           const recipientAta = getAssociatedTokenAddressSync(ataMintKey, recipientKey, true).toBase58();
           
           // For full spend, create a note for recipient (shielded-to-shielded)
@@ -3017,23 +2991,29 @@ export default function App() {
           const sharedNote = encodeSharedNote(recipientNote, tokenType);
           const recipientZkHash = await computeZkHash(trimmedRecipient, tokenType, recipientAmount);
           
-          setPendingWithdrawalProof(proof);
-          setPendingWithdrawalNote(spendNote);
-          setPendingRecipient(recipientKey.toBase58());
-          setPendingRecipientAta(recipientAta);
-          
+          // Store ALL data needed for deferred proof generation
           (window as unknown as Record<string, unknown>).__pendingTransfer = {
             isPartial: false,
-            recipientNote,
+            isDeferredProof: true, // Flag for deferred proof generation
+            isFullSpend: true,
+            // Data for proof generation
+            inputNote,
+            merkleProof,
             recipientKey: recipientKey.toBase58(),
+            recipientKeyPubkey: recipientKey, // For pubkeyToField
+            // Data for transaction
+            recipientNote,
             recipientAta,
+            spendNote,
             atoms: recipientAmount, // Updated to reflect fee deduction
             originalAmount: atoms,
             feeAtoms: feeAtoms.toString(),
+            tokenType,
+            parsedAmount: Number(recipientAmount) / Math.pow(10, decimals),
+            decimals,
           };
           
-          console.log('[Transfer] Opening review modal (full spend)');
-          console.log('[Transfer] Opening review modal (full spend)');
+          console.log('[Transfer] Opening review modal IMMEDIATELY (full spend, proof deferred)');
           setTransferReview({
             recipient: trimmedRecipient,
             recipientZkHash,
@@ -3045,9 +3025,11 @@ export default function App() {
             transparentPayout,
             isFullyPrivate: trimmedRecipient.startsWith('noctura1'),
           });
+          setShieldedSendPending(false); // Ready for user to confirm
           
           const feeNote = tokenType === 'NOC' ? `(fee deducted from amount)` : `(fee paid in NOC)`;
           setStatus(`Review the shielded ${tokenType} transfer. Recipient receives: ${(Number(recipientAmount) / Math.pow(10, decimals)).toFixed(decimals === 9 ? 9 : 6)} ${tokenType}. Privacy fee: 0.25 NOC (charged from vault). ALL FUNDS FROM SHIELDED BALANCE.`);
+          return; // Exit early - wait for user confirmation
         }
       } catch (err) {
         resetPendingShieldedTransfer();
@@ -3080,12 +3062,15 @@ export default function App() {
       isAutoConsolidate?: boolean;
       isSequentialConsolidate?: boolean;
       isShieldedToShielded?: boolean;
+      isDeferredProof?: boolean; // Flag for deferred proof generation
+      isFullSpend?: boolean;
       consolidateProof?: ProverResponse;
       withdrawProof?: ProverResponse;
       consolidatedNote?: Note;
       recipientNote?: Note;
       changeNote?: Note;
       recipientKey?: string;
+      recipientKeyPubkey?: PublicKey; // For pubkeyToField in full spend
       recipientAta?: string;
       atoms?: bigint;
       allNotesUsed?: string[];
@@ -3101,6 +3086,8 @@ export default function App() {
       spendNote?: ShieldedNoteRecord;
       trimmedRecipient?: string;
       parsedAmount?: number;
+      decimals?: number;
+      originalAmount?: bigint;
     } | undefined;
     
     console.log('[Transfer] Pending transfer state:', {
@@ -3124,8 +3111,9 @@ export default function App() {
     const isAutoConsolidate = pendingTransfer?.isAutoConsolidate;
     const isSequentialConsolidate = pendingTransfer?.isSequentialConsolidate;
     const isShieldedToShielded = pendingTransfer?.isShieldedToShielded;
+    const isDeferredProof = pendingTransfer?.isDeferredProof;
     
-    console.log('[Transfer] Transfer type flags:', { isPartialTransfer, isAutoConsolidate, isSequentialConsolidate, isShieldedToShielded });
+    console.log('[Transfer] Transfer type flags:', { isPartialTransfer, isAutoConsolidate, isSequentialConsolidate, isShieldedToShielded, isDeferredProof });
     
     if (!keypair || !transferReview) {
       console.log('Missing required state, returning early');
@@ -3151,7 +3139,24 @@ export default function App() {
       }
       console.log('[Transfer] ✓ Shielded-to-shielded data validated');
     }
-    // For non-sequential consolidate, we need the withdrawal proof and note
+    // For deferred proof, validate we have the required data for proof generation
+    else if (isDeferredProof) {
+      console.log('[Transfer] Validating deferred proof data...');
+      if (!pendingTransfer?.inputNote || !pendingTransfer?.merkleProof) {
+        console.error('[Transfer] Missing deferred proof data:', {
+          hasInputNote: !!pendingTransfer?.inputNote,
+          hasMerkleProof: !!pendingTransfer?.merkleProof,
+          hasRecipientNote: !!pendingTransfer?.recipientNote,
+          hasChangeNote: !!pendingTransfer?.changeNote,
+        });
+        setStatus('❌ Error: Missing transfer data. Please cancel and try again.');
+        setTransferReview(null);
+        resetPendingShieldedTransfer();
+        return;
+      }
+      console.log('[Transfer] ✓ Deferred proof data validated');
+    }
+    // For non-sequential consolidate without deferred proof, we need the withdrawal proof and note
     else if (!isSequentialConsolidate && (!pendingWithdrawalProof || !pendingWithdrawalNote)) {
       console.log('Missing withdrawal proof/note (non-sequential case)');
       setStatus('❌ Error: Missing withdrawal proof. Please try again.');
@@ -3159,8 +3164,8 @@ export default function App() {
       return;
     }
     
-    // For non-sequential non-partial, we need the recipient ATA
-    if (!isShieldedToShielded && !isSequentialConsolidate && !isPartialTransfer && !pendingRecipientAta) {
+    // For non-sequential non-partial without deferred proof, we need the recipient ATA
+    if (!isShieldedToShielded && !isSequentialConsolidate && !isPartialTransfer && !isDeferredProof && !pendingRecipientAta) {
       console.log('Missing recipient ATA for full withdrawal');
       setStatus('❌ Error: Missing recipient address. Please try again.');
       setTransferReview(null);
@@ -3463,6 +3468,94 @@ export default function App() {
         resetPendingShieldedTransfer();
         await refreshBalances();
         return;
+      }
+      
+      // Handle DEFERRED PROOF for shielded-to-transparent transfers
+      // Proof is generated HERE (after user confirms) for responsive UX
+      if (isDeferredProof && pendingTransfer?.inputNote && pendingTransfer?.merkleProof) {
+        console.log('[Transfer] 🔄 Deferred proof: generating proof now (after user confirmed)');
+        
+        const { inputNote, merkleProof, recipientKey, recipientAta, spendNote, tokenType, decimals } = pendingTransfer;
+        
+        if (pendingTransfer.isPartial || pendingTransfer.isFullSpend === false) {
+          // Partial spend: use transfer circuit to split the note
+          const { recipientNote, changeNote } = pendingTransfer;
+          
+          if (!recipientNote || !changeNote) {
+            throw new Error('Missing recipient/change note for partial transfer');
+          }
+          
+          setStatus('Generating zero-knowledge proof (this may take 10-15 seconds)…');
+          console.log('[Transfer] Generating deferred transfer proof (partial spend)...');
+          
+          const transferWitness = serializeTransferWitness({
+            inputNote,
+            merkleProof,
+            outputNote1: recipientNote,
+            outputNote2: changeNote,
+          });
+          
+          const proof = await proveCircuit('transfer', transferWitness);
+          console.log('[Transfer] ✅ Deferred proof generated successfully');
+          
+          logProofPayload('transfer-split-deferred', {
+            inputNullifier: spendNote!.nullifier,
+            merkleRoot: merkleProof.root.toString(),
+            outputCommitment1: recipientNote.commitment.toString(),
+            outputCommitment2: changeNote.commitment.toString(),
+            publicInputs: proof.publicInputs,
+            proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
+          });
+          
+          // Set up pending state for the existing partial transfer handler
+          setPendingWithdrawalProof(proof);
+          setPendingWithdrawalNote(spendNote!);
+          setPendingRecipient(recipientKey!);
+          setPendingRecipientAta(recipientAta!);
+          
+          // Clear deferred flag and continue to partial transfer handler
+          delete (pendingTransfer as any).isDeferredProof;
+          
+        } else if (pendingTransfer.isFullSpend) {
+          // Full spend: use withdraw circuit
+          const { recipientKeyPubkey, recipientNote, atoms, originalAmount, feeAtoms } = pendingTransfer;
+          
+          if (!recipientKeyPubkey) {
+            throw new Error('Missing recipient public key for full spend');
+          }
+          
+          setStatus('Generating zero-knowledge proof (this may take 10-15 seconds)…');
+          console.log('[Transfer] Generating deferred withdraw proof (full spend)...');
+          
+          const witness = serializeWithdrawWitness({
+            inputNote,
+            merkleProof,
+            receiver: pubkeyToField(recipientKeyPubkey),
+          });
+          
+          const proof = await proveCircuit('withdraw', witness);
+          console.log('[Transfer] ✅ Deferred proof generated successfully');
+          
+          logProofPayload('withdraw-deferred', {
+            inputNullifier: spendNote!.nullifier,
+            merkleRoot: merkleProof.root.toString(),
+            publicInputs: proof.publicInputs,
+            proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
+            receiver: recipientKey,
+          });
+          
+          // Set up pending state for the existing full spend handler
+          setPendingWithdrawalProof(proof);
+          setPendingWithdrawalNote(spendNote!);
+          setPendingRecipient(recipientKey!);
+          setPendingRecipientAta(recipientAta!);
+          
+          // Clear deferred flag and let existing code handle the rest
+          delete (pendingTransfer as any).isDeferredProof;
+        }
+        
+        // Fall through to existing handlers with proof now generated
+        console.log('[Transfer] Deferred proof complete, continuing to submit...');
       }
       
       if (isSequentialConsolidate && pendingTransfer?.allNotes && pendingTransfer?.recipientKey) {
