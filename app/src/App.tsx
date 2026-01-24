@@ -3208,6 +3208,16 @@ export default function App() {
         // For SOL transfers: we need to collect a separate 0.25 NOC fee
         if (tokenType === 'NOC') {
           const expectedChange = inputNote.amount - recipientNote.amount - PRIVACY_FEE_ATOMS;
+          const sumOutputs = recipientNote.amount + changeNote.amount;
+          const sumInputs = inputNote.amount;
+          console.log('[Transfer] Amounts for ZK circuit:', {
+            inputAmount: inputNote.amount.toString(),
+            recipientAmount: recipientNote.amount.toString(),
+            changeAmount: changeNote.amount.toString(),
+            fee: PRIVACY_FEE_ATOMS.toString(),
+            sumInputs: sumInputs.toString(),
+            sumOutputs: sumOutputs.toString(),
+          });
           if (changeNote.amount !== expectedChange) {
             console.error('[Transfer] ❌ Change note amount mismatch! Expected:', expectedChange.toString(), 'Actual:', changeNote.amount.toString());
             setStatus('Error: Change note amount mismatch.');
@@ -3216,13 +3226,15 @@ export default function App() {
             resetPendingShieldedTransfer();
             return;
           }
+          if (sumInputs !== sumOutputs) {
+            console.error('[Transfer] ❌ ZK circuit amount conservation failed! inputNote.amount:', sumInputs.toString(), 'recipientNote.amount + changeNote.amount:', sumOutputs.toString());
+            setStatus('Error: ZK circuit amount conservation failed.');
+            setConfirmingTransfer(false);
+            setTransferReview(null);
+            resetPendingShieldedTransfer();
+            return;
+          }
         }
-        console.log('[Transfer] Witness values for shielded-to-shielded:', {
-          inputAmount: inputNote.amount.toString(),
-          recipientAmount: recipientNote.amount.toString(),
-          changeAmount: changeNote.amount.toString(),
-          fee: PRIVACY_FEE_ATOMS.toString(),
-        });
         
         if (tokenType !== 'NOC') {
           // SOL transfer - need to collect 0.25 NOC fee separately
