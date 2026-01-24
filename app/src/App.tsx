@@ -1782,8 +1782,8 @@ export default function App() {
   );
 
   const needsAirdrop = useMemo(() => {
-    // If faucet was marked but balance is still zero (cluster change or failure), allow retry
-    const needs = !stored?.faucetGranted || nocBalance < 0.0001;
+    // Only allow airdrop if faucetGranted has never been set - one-time per wallet
+    const needs = !stored?.faucetGranted;
     console.log('[Airdrop Check]', { faucetGranted: stored?.faucetGranted, nocBalance, needsAirdrop: needs });
     return needs;
   }, [stored?.faucetGranted, nocBalance]);
