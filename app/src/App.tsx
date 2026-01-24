@@ -3574,7 +3574,123 @@ export default function App() {
           } else {
             // SOL: collect NOC fee first, then withdraw SOL
             console.log('[AutoConsolidate] SOL withdrawal: collecting NOC fee first');
-            // (fee collection code here - same as before)
+            
+            // Find a NOC note to pay the fee from
+            const walletAddress = keypair.publicKey.toBase58();
+            const nocNotes = shieldedNotes.filter(n => 
+              !n.spent && 
+              n.owner === walletAddress && 
+              (n.tokenType === 'NOC' || !n.tokenType || n.tokenMintAddress === NOC_TOKEN_MINT)
+            );
+            
+            if (nocNotes.length === 0 || nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n) < PRIVACY_FEE_ATOMS) {
+              throw new Error('Insufficient NOC in vault for privacy fee. Need 0.25 NOC shielded.');
+            }
+            
+            // Look for an EXACT 0.25 NOC note
+            let feeNoteAC = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
+            
+            if (!feeNoteAC) {
+              // No exact fee note - create one from a larger NOC note first
+              console.log('[AutoConsolidate] No exact 0.25 NOC fee note found - creating one via split...');
+              const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
+              
+              if (!splittableNote) {
+                throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available.');
+              }
+              
+              setStatus('Creating 0.25 NOC fee note from vault...');
+              const allUnspent = useShieldedNotes.getState().notes.filter(
+                n => n.owner === walletAddress && !n.spent
+              );
+              
+              const splitInputNote: Note = {
+                secret: BigInt(splittableNote.secret),
+                amount: BigInt(splittableNote.amount),
+                tokenMint: getCorrectTokenMint(splittableNote),
+                blinding: BigInt(splittableNote.blinding),
+                rho: BigInt(splittableNote.rho),
+                commitment: BigInt(splittableNote.commitment),
+                nullifier: BigInt(splittableNote.nullifier),
+              };
+              
+              const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
+              const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
+              const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
+              const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
+              
+              const splitWitness = serializeTransferWitness({
+                inputNote: splitInputNote,
+                merkleProof: splitMerkleProof,
+                outputNote1: newFeeNote,
+                outputNote2: splitChangeNote,
+              });
+              
+              const splitProof = await proveCircuit('transfer', splitWitness);
+              const splitResult = await relayTransfer({
+                proof: splitProof,
+                nullifier: splittableNote.nullifier,
+                outputCommitment1: newFeeNote.commitment.toString(),
+                outputCommitment2: splitChangeNote.commitment.toString(),
+              });
+              
+              markNoteSpent(splittableNote.nullifier);
+              const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+              const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+              addShieldedNote(feeNoteRecord);
+              addShieldedNote(changeNoteRecord);
+              feeNoteAC = feeNoteRecord;
+              await new Promise(r => setTimeout(r, 200));
+            }
+            
+            // Collect the 0.25 NOC fee
+            setStatus('Withdrawing privacy fee (0.25 NOC)...');
+            const currentNotes = useShieldedNotes.getState().notes.filter(
+              n => n.owner === walletAddress && !n.spent
+            );
+            const feeMerkleProof = buildMerkleProof(currentNotes, feeNoteAC);
+            
+            const feeInputNote: Note = {
+              secret: BigInt(feeNoteAC.secret),
+              amount: BigInt(feeNoteAC.amount),
+              tokenMint: getCorrectTokenMint(feeNoteAC),
+              blinding: BigInt(feeNoteAC.blinding),
+              rho: BigInt(feeNoteAC.rho),
+              commitment: BigInt(feeNoteAC.commitment),
+              nullifier: BigInt(feeNoteAC.nullifier),
+            };
+            
+            const nocMint = new PublicKey(NOC_TOKEN_MINT);
+            const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
+            const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner, false);
+            
+            const feeWitness = serializeWithdrawWitness({
+              inputNote: feeInputNote,
+              merkleProof: feeMerkleProof,
+              receiver: pubkeyToField(feeCollectorOwner),
+            });
+            
+            const feeProof = await proveCircuit('withdraw', feeWitness);
+            
+            try {
+              const feeRes = await relayWithdraw({
+                proof: feeProof,
+                amount: feeNoteAC.amount,
+                nullifier: feeNoteAC.nullifier,
+                recipient: feeCollectorOwner.toBase58(),
+                recipientAta: feeCollectorAta.toBase58(),
+                mint: nocMint.toBase58(),
+                collectFee: false, // This IS the fee payment
+              });
+              console.log('[AutoConsolidate] ✅ Fee collected from vault:', feeRes.signature);
+              markNoteSpent(feeNoteAC.nullifier);
+            } catch (feeErr) {
+              console.error('[AutoConsolidate] ❌ Fee collection failed:', feeErr);
+              throw new Error('Failed to collect privacy fee from vault. Please retry.');
+            }
+            
+            // Now withdraw SOL
+            setStatus('Step 2/2: Withdrawing SOL from consolidated note...');
             const wsolMint = new PublicKey(WSOL_MINT);
             const res = await relayWithdraw({
               proof: pendingTransfer.withdrawProof,
@@ -3583,7 +3699,7 @@ export default function App() {
               recipient: pendingTransfer.recipientKey!,
               recipientAta: pendingTransfer.recipientAta!,
               mint: wsolMint.toBase58(),
-              collectFee: false,
+              collectFee: false, // Fee already collected above
             });
             console.log('[AutoConsolidate] SOL withdrawal succeeded:', res.signature);
             markNoteSpent(pendingTransfer.consolidatedNote.nullifier.toString());
@@ -4269,6 +4385,7 @@ export default function App() {
     shieldedKeys,
     markNoteSpent,
     addShieldedNote,
+    addTransaction,
     resetPendingShieldedTransfer,
     refreshBalances,
   ]);
@@ -4861,7 +4978,7 @@ export default function App() {
     } finally {
       setTxConfirmPending(false);
     }
-  }, [keypair, txConfirmation, refreshBalances, performShieldedDeposit, ensureFeeNotes]);
+  }, [keypair, txConfirmation, refreshBalances, performShieldedDeposit, ensureFeeNotes, addTransaction]);
 
   const requestShieldedAirdrop = useCallback(async () => {
     if (!keypair) return;
@@ -5163,7 +5280,7 @@ export default function App() {
       console.error('Failed to fetch transactions:', err);
       return [];
     }
-  }, [keypair, getWalletTransactions]);
+  }, [keypair, getWalletTransactions, addTransaction]);
 
   const handleShieldDeposit = useCallback(async (token: 'SOL' | 'NOC', amount: string) => {
     if (!keypair) return;
