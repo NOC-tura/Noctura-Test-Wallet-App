@@ -4213,36 +4213,15 @@ export default function App() {
               let feeNote = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
               
               if (!feeNote) {
-                // No exact fee note - create one from a larger NOC note first (NEVER waste NOC!)
-                console.log('[Transfer] No exact 0.25 NOC fee note found - creating one via split...');
-                console.log('[Transfer] Available NOC notes:', nocNotes.map(n => ({ 
-                  amount: Number(BigInt(n.amount)) / 1e6,
-                  nullifier: n.nullifier.slice(0, 10),
-                })));
-                
-                // Now generate transfer proof
-                setStatus('Generating zero-knowledge proof for private transfer…');
-
-                // Log all witness fields for debugging
-                console.log('[DEBUG] Shielded-to-shielded transfer witness fields:');
-                console.log('inputNote:', inputNote);
-                console.log('recipientNote:', recipientNote);
-                console.log('changeNote:', changeNote);
-                console.log('merkleProof:', merkleProof);
-
-                // Serialize transfer witness
-                const transferWitness = serializeTransferWitness({
-                  inputNote,
-                  merkleProof,
-                  outputNote1: recipientNote,
-                  outputNote2: changeNote,
-                });
-                console.log('[DEBUG] Serialized transferWitness:', transferWitness);
-                const proof = await proveCircuit('transfer', transferWitness);
+                // No exact fee note - create one from a larger NOC note first
+                const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
+                if (!splittableNote) {
+                  throw new Error('No NOC note large enough to split for fee.');
+                }
+                // Type guard: splittableNote is defined
                 const allUnspent = useShieldedNotes.getState().notes.filter(
                   n => n.owner === walletAddress && !n.spent
                 );
-                
                 const splitInputNote: Note = {
                   secret: BigInt(splittableNote.secret),
                   amount: BigInt(splittableNote.amount),
@@ -4252,45 +4231,37 @@ export default function App() {
                   commitment: BigInt(splittableNote.commitment),
                   nullifier: BigInt(splittableNote.nullifier),
                 };
-                
                 const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
-                
-                // Create fee note (0.25 NOC) + change note (rest)
+                if (!splitMerkleProof) {
+                  throw new Error('Failed to build merkle proof for splittable note.');
+                }
                 const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
                 const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
+                if (splitChangeAmount < 0n) {
+                  throw new Error('Splittable note amount is less than fee.');
+                }
                 const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
-                
                 const splitWitness = serializeTransferWitness({
                   inputNote: splitInputNote,
                   merkleProof: splitMerkleProof,
                   outputNote1: newFeeNote,
                   outputNote2: splitChangeNote,
                 });
-                
                 console.log('[Transfer] Generating proof to split note for fee...');
                 const splitProof = await proveCircuit('transfer', splitWitness);
-                
                 const splitResult = await relayTransfer({
                   proof: splitProof,
                   nullifier: splittableNote.nullifier,
                   outputCommitment1: newFeeNote.commitment.toString(),
                   outputCommitment2: splitChangeNote.commitment.toString(),
                 });
-                
                 console.log('[Transfer] ✅ Created exact 0.25 NOC fee note:', splitResult.signature);
-                
-                // Mark old note as spent and save new notes
                 markNoteSpent(splittableNote.nullifier);
-                
                 const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
                 const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
                 addShieldedNote(feeNoteRecord);
                 addShieldedNote(changeNoteRecord);
-                
-                // Use the newly created fee note
                 feeNote = feeNoteRecord;
-                
-                // Small delay to let state update
                 await new Promise(r => setTimeout(r, 200));
               }
               
