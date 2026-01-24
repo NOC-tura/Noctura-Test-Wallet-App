@@ -927,7 +927,7 @@ export function Dashboard({
                   </div>
                   <div className="flex justify-between text-neutral-400">
                     <span>SOL Network Fee:</span>
-                    <span className="text-green-400">Free (Relayer Pays)</span>
+                    <span className="text-green-400">0.000005 SOL</span>
                   </div>
                 </div>
 
