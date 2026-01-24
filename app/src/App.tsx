@@ -258,17 +258,24 @@ async function prepareSolFeeForWithdrawal(
     
     feeNote = feeNoteRecord;
     
-    // Small delay to let state update
-    await new Promise(r => setTimeout(r, 200));
+    // Instead of arbitrary delay, re-fetch latest notes from Zustand to ensure state is up to date
+    // This guarantees the new fee note is present for the withdrawal proof
+    feeNote = useShieldedNotes.getState().notes.find(
+      n => n.nullifier === feeNoteRecord.nullifier && !n.spent
+    ) || feeNoteRecord;
   }
   
   // Now we have an exact fee note - generate withdrawal proof
   console.log('[SOL Fee] Using exact 0.00005 SOL fee note for withdrawal');
-  
-  // Refresh note list to include newly split notes
+
+  // Always re-fetch latest notes from Zustand to ensure the new note is present
   const currentNotes = useShieldedNotes.getState().notes.filter(
     n => n.owner === walletAddress && !n.spent
   );
+  // Defensive: if feeNote is not found, throw a clear error
+  if (!currentNotes.find(n => n.nullifier === feeNote.nullifier)) {
+    throw new Error('[prepareSolFeeForWithdrawal] Fee note not found in latest state after split/add. State update race condition.');
+  }
   const feeMerkleProof = buildMerkleProof(currentNotes, feeNote);
   
   const feeInputNote: Note = {
