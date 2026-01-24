@@ -2240,29 +2240,26 @@ export default function App() {
           const spendNote = sortedNotes.find(n => BigInt(n.amount) >= atoms) || sortedNotes[0];
           const noteAmount = BigInt(spendNote.amount);
           
-          // For shielded-to-shielded transfers, the fee is collected SEPARATELY
+          // For shielded-to-shielded transfers, the fee is handled as follows:
+          // - For NOC: fee is deducted from change note (input = recipient + change + fee)
+          // - For SOL: fee is paid separately from NOC note
           // The transfer circuit requires: input = output1 + output2
-          // So we don't include fee in the transfer amounts - it's withdrawn separately
-          // This applies to BOTH SOL and NOC transfers
-          const totalNeeded = atoms; // Just the transfer amount, no fee in circuit
-          
-          // Verify we have NOC for the privacy fee (always needed for shielded-to-shielded)
+          // For NOC, output1 = recipient, output2 = change (with fee deducted)
+          // For SOL, output1 = recipient, output2 = change (no fee deducted)
+
+          // Verify we have enough NOC for the privacy fee
           const nocNotes = shieldedNotes.filter(n => {
             if (n.spent || n.owner !== walletAddress) return false;
-            // Must be explicitly NOC token
             if (n.tokenType === 'NOC') return true;
             if (n.tokenMintAddress === NOC_TOKEN_MINT) return true;
-            // Legacy notes without tokenType that match NOC mint
             if (!n.tokenType && n.tokenMintAddress === NOC_TOKEN_MINT) return true;
             return false;
           });
           const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
           console.log('[Transfer] NOC available for fee:', Number(totalNocAvailable) / 1e6, 'NOC notes:', nocNotes.length);
-          
-          // For NOC transfers, we need fee PLUS the transfer amount
-          // For SOL transfers, we just need the fee in NOC
+
           if (tokenType === 'NOC') {
-            // NOC transfer: need enough NOC for both transfer AND fee (from possibly different notes)
+            // NOC transfer: need enough NOC for both transfer AND fee
             const totalNocNeeded = atoms + PRIVACY_FEE_ATOMS;
             const allNocAvailable = availableNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
             if (allNocAvailable < totalNocNeeded) {
@@ -2274,20 +2271,22 @@ export default function App() {
               throw new Error(`Insufficient NOC for privacy fee. Need 0.25 NOC but only have ${(Number(totalNocAvailable) / 1_000_000).toFixed(6)} NOC shielded.`);
             }
           }
-          
+
+          // For NOC, input must cover amount + fee
+          const feeDeductedFromChange = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
+          const totalNeeded = atoms + feeDeductedFromChange;
+
           if (noteAmount < totalNeeded) {
-            // Need multi-note or error
             const totalAvailable = availableNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
             if (totalAvailable < totalNeeded) {
               throw new Error(`Insufficient ${tokenType}. Need ${Number(totalNeeded) / (tokenType === 'SOL' ? 1e9 : 1e6)} but only have ${Number(totalAvailable) / (tokenType === 'SOL' ? 1e9 : 1e6)} shielded.`);
             }
-            // For now, require single note (multi-note shielded-to-shielded coming later)
             throw new Error(`Your largest ${tokenType} note has ${Number(noteAmount) / (tokenType === 'SOL' ? 1e9 : 1e6)} but need ${Number(totalNeeded) / (tokenType === 'SOL' ? 1e9 : 1e6)}. Please consolidate notes first.`);
           }
-          
+
           // Build merkle proof for the input note
           const merkleProof = buildMerkleProof(availableNotes, spendNote);
-          
+
           const inputNote = {
             secret: BigInt(spendNote.secret),
             amount: noteAmount,
@@ -2297,25 +2296,20 @@ export default function App() {
             commitment: BigInt(spendNote.commitment),
             nullifier: BigInt(spendNote.nullifier),
           };
-          
-          // Create recipient's note (they will own this in the vault)
+
+          // Create recipient's note
           const recipientNote = createNoteFromSecrets(atoms, tokenType);
           console.log('[Transfer] Created recipient note with commitment:', recipientNote.commitment.toString().slice(0, 20));
-          
-          // Create change note back to sender
-          // For NOC transfers: fee is deducted from change (input = recipient + change + fee)
-          // For SOL transfers: fee is collected separately from NOC balance
-          const feeDeductedFromChange = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
+
+          // Create change note
           const changeAmount = noteAmount - atoms - feeDeductedFromChange;
-          
           if (changeAmount < 0n) {
             throw new Error(`Insufficient ${tokenType} for transfer plus fee. Have ${Number(noteAmount) / 1e6}, need ${Number(atoms + feeDeductedFromChange) / 1e6}`);
           }
-          
           const changeNote = createNoteFromSecrets(changeAmount, tokenType);
           console.log('[Transfer] Created change note:', Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6), tokenType, tokenType === 'NOC' ? '(fee deducted from change)' : '');
-          
-          // Store pending shielded-to-shielded transfer data for confirmation
+
+          // Store pending transfer data
           (window as unknown as Record<string, unknown>).__pendingTransfer = {
             isShieldedToShielded: true,
             inputNote,
@@ -2330,28 +2324,28 @@ export default function App() {
             parsedAmount,
             changeAmount,
           };
-          
+
           console.log('[Transfer] Opening review modal for shielded-to-shielded transfer');
-          
-          // Show confirmation modal with transfer details
+
+          // Show confirmation modal
           setTransferReview({
             recipient: trimmedRecipient,
             amount: parsedAmount,
             atoms,
-            feeNoc: 0.25, // Privacy fee (for NOC: deducted from change, for SOL: separate withdrawal)
+            feeNoc: 0.25,
             isPartialSpend: changeAmount > 0n,
             changeAmount: changeAmount > 0n ? Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6) : undefined,
             tokenType,
-            isFullyPrivate: true, // Shielded-to-shielded is always fully private
+            isFullyPrivate: true,
           });
-          
+
           const feeNote = tokenType === 'NOC' ? ' (0.25 NOC fee deducted from change)' : '';
           const changeMsg = changeAmount > 0n 
             ? ` Change: ${(Number(changeAmount) / (tokenType === 'SOL' ? 1e9 : 1e6)).toFixed(tokenType === 'SOL' ? 9 : 6)} ${tokenType} stays shielded.${feeNote}`
             : '';
           setStatus(`Review: Full privacy transfer of ${parsedAmount} ${tokenType}.${changeMsg}`);
-          setShieldedSendPending(false); // Ready for user to confirm
-          return; // Exit early - wait for confirmation
+          setShieldedSendPending(false);
+          return;
         }
         
         // Standard Solana address - WARN: This breaks privacy!
