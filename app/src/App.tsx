@@ -4363,6 +4363,28 @@ export default function App() {
               const solWithdrawProof = await proveCircuit('withdraw', solWithdrawWitness);
               console.log('[Transfer] ✅ SOL withdrawal proof generated');
               
+              // Prepare SOL network fee for shielded-to-transparent SOL withdrawal
+              // User pays network fee from their shielded SOL balance
+              let solFeeData: { solFeeProof: ProverResponse; solFeeNullifier: string; solFeeAmount: string; feeNoteRecord: ShieldedNoteRecord } | null = null;
+              try {
+                solFeeData = await prepareSolFeeForWithdrawal(
+                  useShieldedNotes.getState().notes, // Use fresh notes after fee collection
+                  walletAddress,
+                  RELAYER_ADDRESS,
+                  setStatus,
+                  markNoteSpent,
+                  addShieldedNote,
+                  keypair.publicKey,
+                );
+                if (solFeeData) {
+                  console.log('[Transfer] SOL network fee proof prepared:', Number(BigInt(solFeeData.solFeeAmount)) / 1e9, 'SOL');
+                } else {
+                  console.log('[Transfer] No shielded SOL available for network fee - relayer will pay (legacy mode)');
+                }
+              } catch (feeErr) {
+                console.warn('[Transfer] Failed to prepare SOL network fee, continuing without (relayer pays):', feeErr);
+              }
+              
               setStatus('Withdrawing SOL to recipient...');
               let withdrawSig: string;
               try {
@@ -4374,9 +4396,20 @@ export default function App() {
                   recipient: pendingTransfer.recipientKey!,
                   recipientAta,
                   mint: wsolMint.toBase58(),
-                  collectFee: false, // Fee already collected above
+                  collectFee: false, // NOC privacy fee already collected above
+                  // Include SOL network fee proof if available (user pays network fees from shielded SOL)
+                  ...(solFeeData ? {
+                    solFeeProof: solFeeData.solFeeProof,
+                    solFeeNullifier: solFeeData.solFeeNullifier,
+                    solFeeAmount: solFeeData.solFeeAmount,
+                  } : {}),
                 });
                 withdrawSig = res.signature;
+                
+                // Mark SOL fee note as spent if used
+                if (solFeeData) {
+                  markNoteSpent(solFeeData.feeNoteRecord.nullifier);
+                }
               } catch (relayErr) {
                 console.error('[Transfer] ❌ Relayer unavailable for SOL withdrawal:', relayErr);
                 setStatus('Relayer unavailable. Shielded SOL withdrawal blocked to avoid exposing signer. Please retry.');
