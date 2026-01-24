@@ -2862,16 +2862,20 @@ export default function App() {
           console.log('[Transfer] Recipient note amount:', recipientNoteAmount.toString());
           
           // Create change note back to ourselves (we keep this shielded)
-          // For NOC: change is reduced by recipient amount AND privacy fee
-          // For SOL: change is only reduced by recipient amount (fee paid separately in NOC)
-          const changeNote = createNoteFromSecrets(changeAmount, tokenType);
-          console.log('[Transfer] Change note created (stays shielded)');
-          
+          // For NOC: change = input - recipient - fee
+          // For SOL: change = input - recipient (fee paid separately)
+          let actualChangeAmount = changeAmount;
+          if (tokenType === 'NOC') {
+            actualChangeAmount = inputNote.amount - recipientNoteAmount - PRIVACY_FEE_ATOMS;
+            if (actualChangeAmount < 0n) {
+              throw new Error('Insufficient NOC for privacy fee.');
+            }
+          }
+          const changeNote = createNoteFromSecrets(actualChangeAmount, tokenType);
+          console.log('[Transfer] Change note created (stays shielded):', actualChangeAmount.toString());
           // Create a note for the recipient
-          // For NOC: includes fee for withdraw circuit
-          // For SOL: just the recipient amount (fee paid separately)
           const recipientNote = createNoteFromSecrets(recipientNoteAmount, tokenType);
-          console.log('[Transfer] Recipient note created');
+          console.log('[Transfer] Recipient note created:', recipientNoteAmount.toString());
           
           // DEFERRED PROOF: Store witness data for generating proof AFTER user confirms
           // This makes the UI responsive - popup appears immediately
@@ -3202,6 +3206,23 @@ export default function App() {
         
         // For NOC transfers: fee is already included in the change calculation (deducted from change)
         // For SOL transfers: we need to collect a separate 0.25 NOC fee
+        if (tokenType === 'NOC') {
+          const expectedChange = inputNote.amount - recipientNote.amount - PRIVACY_FEE_ATOMS;
+          if (changeNote.amount !== expectedChange) {
+            console.error('[Transfer] ❌ Change note amount mismatch! Expected:', expectedChange.toString(), 'Actual:', changeNote.amount.toString());
+            setStatus('Error: Change note amount mismatch.');
+            setConfirmingTransfer(false);
+            setTransferReview(null);
+            resetPendingShieldedTransfer();
+            return;
+          }
+        }
+        console.log('[Transfer] Witness values for shielded-to-shielded:', {
+          inputAmount: inputNote.amount.toString(),
+          recipientAmount: recipientNote.amount.toString(),
+          changeAmount: changeNote.amount.toString(),
+          fee: PRIVACY_FEE_ATOMS.toString(),
+        });
         
         if (tokenType !== 'NOC') {
           // SOL transfer - need to collect 0.25 NOC fee separately
