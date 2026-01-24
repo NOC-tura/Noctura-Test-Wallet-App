@@ -3507,11 +3507,10 @@ export default function App() {
             proofBytesPreview: `${proof.proofBytes.slice(0, 48)}…`,
           });
           
-          // Set up pending state for the existing partial transfer handler
-          setPendingWithdrawalProof(proof);
-          setPendingWithdrawalNote(spendNote!);
-          setPendingRecipient(recipientKey!);
-          setPendingRecipientAta(recipientAta!);
+          // Store proof directly in pendingTransfer (NOT React state - state updates are async!)
+          // This allows the partial transfer handler to access it immediately
+          (pendingTransfer as any).deferredProof = proof;
+          (pendingTransfer as any).deferredSpendNote = spendNote;
           
           // Clear deferred flag and continue to partial transfer handler
           delete (pendingTransfer as any).isDeferredProof;
@@ -3544,11 +3543,9 @@ export default function App() {
             receiver: recipientKey,
           });
           
-          // Set up pending state for the existing full spend handler
-          setPendingWithdrawalProof(proof);
-          setPendingWithdrawalNote(spendNote!);
-          setPendingRecipient(recipientKey!);
-          setPendingRecipientAta(recipientAta!);
+          // Store proof directly in pendingTransfer (NOT React state - state updates are async!)
+          (pendingTransfer as any).deferredProof = proof;
+          (pendingTransfer as any).deferredSpendNote = spendNote;
           
           // Clear deferred flag and let existing code handle the rest
           delete (pendingTransfer as any).isDeferredProof;
@@ -4034,14 +4031,18 @@ export default function App() {
         setStatus('Step 1/2: Splitting note (via relayer for privacy)…');
         console.log('Calling relayTransfer (split)...');
         
-        if (!pendingWithdrawalProof || !pendingWithdrawalNote) {
+        // Use deferred proof if available (from isDeferredProof handler), otherwise use React state
+        const proofToUse = (pendingTransfer as any).deferredProof || pendingWithdrawalProof;
+        const noteToUse = (pendingTransfer as any).deferredSpendNote || pendingWithdrawalNote;
+        
+        if (!proofToUse || !noteToUse) {
           throw new Error('Missing withdrawal proof or note for split transfer');
         }
         
         // Use relayer to submit transfer - preserves privacy
         const splitResult = await relayTransfer({
-          proof: pendingWithdrawalProof,
-          nullifier: pendingWithdrawalNote.nullifier,
+          proof: proofToUse,
+          nullifier: noteToUse.nullifier,
           outputCommitment1: pendingTransfer.recipientNote.commitment.toString(),
           outputCommitment2: pendingTransfer.changeNote.commitment.toString(),
         });
@@ -4050,7 +4051,7 @@ export default function App() {
         console.log('Split succeeded (via relayer):', splitSig);
         
         // Mark old note as spent
-        markNoteSpent(pendingWithdrawalNote.nullifier);
+        markNoteSpent(noteToUse.nullifier);
         
         // Add the change note to our local state (we keep this one)
         const tokenType = transferReview?.tokenType || 'NOC';
@@ -4079,7 +4080,8 @@ export default function App() {
             setStatus('Step 2/2: Generating withdrawal proof…');
           
             // Get all notes including the newly added ones
-            const allNotes = [...shieldedNotes.filter(n => n.nullifier !== pendingWithdrawalNote.nullifier), changeNoteRecord, recipientNoteRecord];
+            // Use noteToUse.nullifier (from deferred proof handler or React state)
+            const allNotes = [...shieldedNotes.filter(n => n.nullifier !== noteToUse.nullifier), changeNoteRecord, recipientNoteRecord];
             console.log('[Transfer] Building merkle proof with', allNotes.length, 'notes');
             const withdrawMerkleProof = buildMerkleProof(allNotes, recipientNoteRecord);
             
