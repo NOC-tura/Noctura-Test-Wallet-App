@@ -45,8 +45,8 @@ const NOC_ATOMS = 1_000_000;
 const SHIELDED_PRIVACY_FEE_NOC = 0.25; // Flat 0.25 NOC fee for ALL shielded transactions (deposits + withdrawals)
 const DEFAULT_SOL_FEE = 0.000005;
 // SOL fee from shielded balance for shielded-to-transparent withdrawals (covers ZK proof verification)
-// 50,000 lamports = 0.00005 SOL - enough for ~2-3 transactions with compute budget
-const SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS = 50_000n; // 0.00005 SOL
+// 5,000 lamports = 0.000005 SOL (Solana base fee per signature)
+const SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS = 5_000n; // 0.000005 SOL
 const SOLANA_CLUSTER = import.meta.env?.VITE_SOLANA_CLUSTER || 'devnet';
 
 // Helper to get the correct tokenMint for a note (handles legacy corrupted values)
@@ -223,7 +223,7 @@ async function prepareSolFeeForWithdrawal(
       nullifier: BigInt(splittableNote.nullifier),
     };
     
-    // Create fee note (0.00005 SOL) + change note (rest)
+    // Create fee note (0.000005 SOL) + change note (rest)
     const newFeeNote = createNoteFromSecrets(SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS, 'SOL');
     const splitChangeAmount = BigInt(splittableNote.amount) - SHIELDED_TO_TRANSPARENT_SOL_FEE_LAMPORTS;
     const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'SOL');
@@ -266,7 +266,7 @@ async function prepareSolFeeForWithdrawal(
   }
   
   // Now we have an exact fee note - generate withdrawal proof
-  console.log('[SOL Fee] Using exact 0.00005 SOL fee note for withdrawal');
+  console.log('[SOL Fee] Using exact 0.000005 SOL fee note for withdrawal');
 
   // Always re-fetch latest notes from Zustand to ensure the new note is present
   const currentNotes = useShieldedNotes.getState().notes.filter(
