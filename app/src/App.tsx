@@ -2203,7 +2203,9 @@ export default function App() {
         
         if (isShieldedRecipient) {
           // Validate shielded address
-          if (!isValidShieldedAddress(trimmedRecipient)) {
+          const validShielded = isValidShieldedAddress(trimmedRecipient);
+          console.log('[Debug] Testing shielded recipient:', trimmedRecipient, 'Valid:', validShielded);
+          if (!validShielded) {
             throw new Error('Invalid shielded address format. Expected: noctura1<hex>');
           }
           
