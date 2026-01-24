@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 import type { AnchorProvider } from '@coral-xyz/anchor';
-import { Keypair, PublicKey, SYSVAR_RENT_PUBKEY, SystemProgram, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SYSVAR_RENT_PUBKEY, SystemProgram, Transaction, sendAndConfirmTransaction, ComputeBudgetProgram } from '@solana/web3.js';
 import BN from 'bn.js';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -538,7 +538,8 @@ export async function submitShieldedDeposit(params: {
       vaultAuthority: pdas.vaultAuthority!.toBase58(),
     });
 
-    const signature = await program.methods
+    // Build the deposit instruction
+    const depositIx = await program.methods
       .transparentDeposit(commitment, nullifier, amount, Buffer.from(proofBytes), publicInputs, priorityLane)
       .accounts({
         payer: keypair.publicKey,
@@ -555,7 +556,21 @@ export async function submitShieldedDeposit(params: {
         systemProgram: SystemProgram.programId,
         rent: SYSVAR_RENT_PUBKEY,
       })
-      .rpc();
+      .instruction();
+
+    // Request more compute units for ZK proof verification (400K instead of default 200K)
+    const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+      units: 400_000,
+    });
+
+    // Build and send transaction with compute budget
+    const tx = new Transaction().add(computeBudgetIx).add(depositIx);
+    const { blockhash } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = keypair.publicKey;
+    tx.sign(keypair);
+    const signature = await connection.sendRawTransaction(tx.serialize());
+    await connection.confirmTransaction(signature, 'confirmed');
 
     console.log('[submitShieldedDeposit] Deposit transaction submitted successfully:', signature);
     return { signature, leafIndex };
@@ -633,7 +648,8 @@ export async function submitShieldedWithdraw(params: {
   const nullifierBytes = bigIntToBytesLE(nullifier);
   const amountBn = new BN(amount.toString());
 
-  const signature = await program.methods
+  // Build the withdraw instruction
+  const withdrawIx = await program.methods
     .transparentWithdraw(amountBn, Buffer.from(proofBytes), publicInputs, nullifierBytes)
     .accounts({
       globalState: pdas.globalState,
@@ -645,7 +661,21 @@ export async function submitShieldedWithdraw(params: {
       vaultAuthority: pdas.vaultAuthority!,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
-    .rpc();
+    .instruction();
+
+  // Request more compute units for ZK proof verification (400K instead of default 200K)
+  const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+    units: 400_000,
+  });
+
+  // Build and send transaction with compute budget
+  const tx = new Transaction().add(computeBudgetIx).add(withdrawIx);
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const signature = await connection.sendRawTransaction(tx.serialize());
+  await connection.confirmTransaction(signature, 'confirmed');
 
   return signature;
 }
@@ -683,6 +713,11 @@ export async function submitShieldedWithdrawSol(params: {
 
   // Build transaction combining fee collection + SOL withdrawal
   const tx = new Transaction();
+
+  // Request more compute units for ZK proof verification (400K instead of default 200K)
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({
+    units: 400_000,
+  }));
 
   // Step 1: Add privacy fee collection instruction (0.25 NOC from user to fee collector)
   const nocMint = new PublicKey(NOC_TOKEN_MINT);
@@ -799,7 +834,8 @@ export async function submitShieldedTransfer(params: {
   const commitment1Bytes = bigIntToBytesLE(outputCommitment1);
   const commitment2Bytes = bigIntToBytesLE(outputCommitment2);
 
-  const signature = await program.methods
+  // Build the shielded transfer instruction
+  const transferIx = await program.methods
     .shieldedTransfer(
       [nullifierBytes],
       [commitment1Bytes, commitment2Bytes],
@@ -811,7 +847,21 @@ export async function submitShieldedTransfer(params: {
       nullifierSet: pdas.nullifierSet,
       transferVerifier: pdas.transferVerifier,
     })
-    .rpc();
+    .instruction();
+
+  // Request more compute units for ZK proof verification (400K instead of default 200K)
+  const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+    units: 400_000,
+  });
+
+  // Build and send transaction with compute budget
+  const tx = new Transaction().add(computeBudgetIx).add(transferIx);
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const signature = await connection.sendRawTransaction(tx.serialize());
+  await connection.confirmTransaction(signature, 'confirmed');
 
   return signature;
 }
