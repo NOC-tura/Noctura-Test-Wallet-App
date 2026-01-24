@@ -2866,9 +2866,10 @@ export default function App() {
           // For SOL: change = input - recipient (fee paid separately)
           let actualChangeAmount = changeAmount;
           if (tokenType === 'NOC') {
-            actualChangeAmount = inputNote.amount - recipientNoteAmount - PRIVACY_FEE_ATOMS;
+            // For shielded-to-shielded, do NOT subtract fee from change note
+            actualChangeAmount = inputNote.amount - recipientNoteAmount;
             if (actualChangeAmount < 0n) {
-              throw new Error('Insufficient NOC for privacy fee.');
+              throw new Error('Insufficient NOC for transfer.');
             }
           }
           const changeNote = createNoteFromSecrets(actualChangeAmount, tokenType);
