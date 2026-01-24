@@ -3208,7 +3208,8 @@ export default function App() {
         // For NOC transfers: fee is already included in the change calculation (deducted from change)
         // For SOL transfers: we need to collect a separate 0.25 NOC fee
         if (tokenType === 'NOC') {
-          const expectedChange = inputNote.amount - recipientNote.amount - PRIVACY_FEE_ATOMS;
+          // For shielded-to-shielded, fee is NOT subtracted from change note
+          const expectedChange = inputNote.amount - recipientNote.amount;
           const sumOutputs = recipientNote.amount + changeNote.amount;
           const sumInputs = inputNote.amount;
           console.log('[Transfer] Amounts for ZK circuit:', {
