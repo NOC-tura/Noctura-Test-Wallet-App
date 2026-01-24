@@ -4894,10 +4894,10 @@ export default function App() {
           owner: noteToAdd.owner.slice(0, 8),
         });
         
+
         try {
           addShieldedNote(noteToAdd);
           console.log('[performShieldedDeposit] ✅ Note added to local storage');
-          
           // Verify it was added
           setTimeout(() => {
             const state = useShieldedNotes.getState();
@@ -4911,6 +4911,65 @@ export default function App() {
               });
             }
           }, 50);
+
+          // --- AUTO-CONSOLIDATION LOGIC ---
+          // After deposit, consolidate all notes of this token type into one
+          const walletAddress = keypair.publicKey.toBase58();
+          // Wait a moment for state to update
+          await new Promise(res => setTimeout(res, 100));
+          const allNotes = useShieldedNotes.getState().notes.filter(n => n.owner === walletAddress && !n.spent && n.tokenType === tokenType);
+          if (allNotes.length > 1) {
+            setStatus(`Auto-consolidating ${allNotes.length} ${tokenType} notes into one…`);
+            const mintKey = tokenType === 'SOL' ? new PublicKey(WSOL_MINT) : new PublicKey(NOC_TOKEN_MINT);
+            // Only consolidate if all notes have matching mint
+            const notesWithMatchingMint = allNotes.filter(n => n.tokenMintAddress === mintKey.toBase58());
+            if (notesWithMatchingMint.length > 1) {
+              const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, mintKey);
+              const consolidatedNotes = [];
+              const allNotesInTree = useShieldedNotes.getState().notes;
+              for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {
+                const step = consolidationSteps[stepIdx];
+                try {
+                  setStatus(`Consolidating batch ${stepIdx + 1}/${consolidationSteps.length}…`);
+                  const consolidateWitness = buildConsolidationWitness({
+                    inputRecords: step.inputRecords,
+                    outputNote: step.outputNote,
+                    allNotesForMerkle: allNotesInTree,
+                  });
+                  const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
+                  const relayResult = await relayConsolidate({
+                    proof: consolidateProof,
+                    inputNullifiers: step.inputNotes.map(n => n.nullifier.toString()),
+                    outputCommitment: step.outputNote.commitment.toString(),
+                  });
+                  // Mark input notes as spent
+                  step.inputRecords.forEach(note => markNoteSpent(note.nullifier));
+                  // Add consolidated note
+                  const consolidatedRecord = {
+                    owner: walletAddress,
+                    commitment: step.outputNote.commitment.toString(),
+                    nullifier: step.outputNote.nullifier.toString(),
+                    secret: step.outputNote.secret.toString(),
+                    blinding: step.outputNote.blinding.toString(),
+                    rho: step.outputNote.rho.toString(),
+                    tokenMintAddress: mintKey.toBase58(),
+                    tokenMintField: step.outputNote.tokenMint.toString(),
+                    amount: step.outputNote.amount.toString(),
+                    spent: false,
+                    leafIndex: -1,
+                    createdAt: Date.now(),
+                    tokenType: tokenType,
+                  };
+                  consolidatedNotes.push(consolidatedRecord);
+                  addShieldedNote(consolidatedRecord);
+                } catch (consolidateError) {
+                  console.error(`[AutoConsolidate] Consolidation step ${stepIdx + 1} failed:`, consolidateError);
+                  throw new Error(`Auto-consolidation failed: ${consolidateError instanceof Error ? consolidateError.message : String(consolidateError)}`);
+                }
+              }
+              setStatus(`Auto-consolidation complete. Notes merged.`);
+            }
+          }
         } catch (addErr) {
           console.error('[performShieldedDeposit] ❌ FAILED TO ADD NOTE:', addErr);
           throw new Error(`Failed to add note to storage: ${(addErr as Error).message}`);

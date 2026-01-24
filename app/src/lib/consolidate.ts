@@ -5,7 +5,7 @@
 
 import { PublicKey } from '@solana/web3.js';
 import type { Note } from '@zk-witness/index';
-import { createNoteFromSecrets } from '../lib/shield';
+import { createNoteFromSecrets, createNoteFromSecretsLegacy } from '../lib/shield';
 import { ShieldedNoteRecord } from '../types/shield';
 import { serializeConsolidateWitness } from '@zk-witness/builders/consolidate';
 import { buildMerkleProof } from '../lib/merkle';
@@ -44,7 +44,8 @@ export function partitionNotesForConsolidation(
     }));
 
     const totalAmount = inputNotes.reduce((sum, n) => sum + n.amount, 0n);
-    const outputNote = createNoteFromSecrets(totalAmount, tokenMint);
+    // Use legacy function to create note from PublicKey
+    const outputNote = createNoteFromSecretsLegacy(totalAmount, tokenMint);
 
     return [{ inputNotes, inputRecords, outputNote }];
   }
@@ -76,7 +77,8 @@ export function partitionNotesForConsolidation(
     }));
 
     const totalAmount = inputNotes.reduce((sum, n) => sum + n.amount, 0n);
-    const outputNote = createNoteFromSecrets(totalAmount, tokenMint);
+    // Use legacy function to create note from PublicKey
+    const outputNote = createNoteFromSecretsLegacy(totalAmount, tokenMint);
 
     steps.push({ inputNotes, inputRecords: batch, outputNote });
   }
