@@ -4902,7 +4902,23 @@ export default function App() {
             });
           } catch (err) {
             console.error('[executeConfirmedTransaction] ❌ Shield SOL deposit failed:', err);
-            setStatus(`Shield deposit failed: ${(err as Error).message}`);
+            const errorMessage = (err as Error).message;
+            setStatus(`Shield deposit failed: ${errorMessage}`);
+            
+            // Record the failed transaction so user can see it in activity
+            addTransaction({
+              type: 'shield_deposit',
+              status: 'failed',
+              amount: txConfirmation.amount,
+              token: 'SOL',
+              from: 'Transparent Balance',
+              to: 'Shielded Vault',
+              fee: '0.25',
+              memo: `Failed: ${errorMessage.slice(0, 50)}`,
+              isShielded: true,
+              walletAddress: keypair.publicKey.toBase58(),
+            });
+            
             throw err;
           }
         } else {
@@ -4960,7 +4976,23 @@ export default function App() {
             
           } catch (err) {
             console.error('[executeConfirmedTransaction] ❌ Shield NOC deposit failed:', err);
-            setStatus(`Shield deposit failed: ${(err as Error).message}`);
+            const errorMessage = (err as Error).message;
+            setStatus(`Shield deposit failed: ${errorMessage}`);
+            
+            // Record the failed transaction so user can see it in activity
+            addTransaction({
+              type: 'shield_deposit',
+              status: 'failed',
+              amount: txConfirmation.amount,
+              token: 'NOC',
+              from: 'Transparent Balance',
+              to: 'Shielded Vault',
+              fee: '0.25',
+              memo: `Failed: ${errorMessage.slice(0, 50)}`,
+              isShielded: true,
+              walletAddress: keypair.publicKey.toBase58(),
+            });
+            
             throw err;
           }
         }
