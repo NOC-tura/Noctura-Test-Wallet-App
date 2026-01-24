@@ -2273,8 +2273,8 @@ export default function App() {
           }
 
           // For NOC, input must cover amount + fee
-          const feeDeductedFromChange = tokenType === 'NOC' ? PRIVACY_FEE_ATOMS : 0n;
-          const totalNeeded = atoms + feeDeductedFromChange;
+          // For shielded-to-shielded, fee is NOT deducted from change note
+          const totalNeeded = atoms;
 
           if (noteAmount < totalNeeded) {
             const totalAvailable = availableNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
@@ -2866,7 +2866,6 @@ export default function App() {
           // For SOL: change = input - recipient (fee paid separately)
           let actualChangeAmount = changeAmount;
           if (tokenType === 'NOC') {
-            // For shielded-to-shielded, do NOT subtract fee from change note
             actualChangeAmount = inputNote.amount - recipientNoteAmount;
             if (actualChangeAmount < 0n) {
               throw new Error('Insufficient NOC for transfer.');
