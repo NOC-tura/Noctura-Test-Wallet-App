@@ -6225,6 +6225,7 @@ export default function App() {
               <span className="text-neutral-400">Amount</span>
               <p className="font-mono text-sm text-purple-300 mt-1">{shieldedTxSuccess.amount}</p>
             </div>
+            {/* Fee is intentionally omitted for shielded-to-shielded full privacy transfers */}
           </div>
 
           <button
