@@ -35,10 +35,21 @@ const REGISTRY_STORAGE_KEY = 'noctura.noteRegistry';
 const REGISTRY_VERSION = 1;
 
 /**
- * Get the note registry from localStorage
+ * Get storage key for a specific wallet (or global if not specified)
  */
-export function getLocalNoteRegistry(): NoteRegistryState {
-  const raw = localStorage.getItem(REGISTRY_STORAGE_KEY);
+function getStorageKey(walletAddress?: string): string {
+  if (walletAddress) {
+    return `${REGISTRY_STORAGE_KEY}.${walletAddress}`;
+  }
+  return REGISTRY_STORAGE_KEY;
+}
+
+/**
+ * Get the note registry from localStorage
+ * @param walletAddress - If provided, gets wallet-specific registry (for per-wallet scanning)
+ */
+export function getLocalNoteRegistry(walletAddress?: string): NoteRegistryState {
+  const raw = localStorage.getItem(getStorageKey(walletAddress));
   if (!raw) {
     return {
       version: REGISTRY_VERSION,
@@ -65,16 +76,18 @@ export function getLocalNoteRegistry(): NoteRegistryState {
 
 /**
  * Save the note registry to localStorage
+ * @param walletAddress - If provided, saves to wallet-specific registry
  */
-export function saveLocalNoteRegistry(state: NoteRegistryState): void {
-  localStorage.setItem(REGISTRY_STORAGE_KEY, JSON.stringify(state));
+export function saveLocalNoteRegistry(state: NoteRegistryState, walletAddress?: string): void {
+  localStorage.setItem(getStorageKey(walletAddress), JSON.stringify(state));
 }
 
 /**
  * Add a new entry to the note registry
+ * @param walletAddress - If provided, adds to wallet-specific registry
  */
-export function addNoteRegistryEntry(entry: NoteRegistryEntry): void {
-  const registry = getLocalNoteRegistry();
+export function addNoteRegistryEntry(entry: NoteRegistryEntry, walletAddress?: string): void {
+  const registry = getLocalNoteRegistry(walletAddress);
   
   // Check for duplicates by commitment
   const exists = registry.entries.some(e => e.commitment === entry.commitment);
@@ -84,41 +97,45 @@ export function addNoteRegistryEntry(entry: NoteRegistryEntry): void {
   }
   
   registry.entries.push(entry);
-  saveLocalNoteRegistry(registry);
+  saveLocalNoteRegistry(registry, walletAddress);
   console.log('[NoteRegistry] Added new entry:', entry.commitment.slice(0, 16));
 }
 
 /**
  * Update last scanned slot
+ * @param walletAddress - If provided, updates wallet-specific slot
  */
-export function updateLastScannedSlot(slot: number): void {
-  const registry = getLocalNoteRegistry();
+export function updateLastScannedSlot(slot: number, walletAddress?: string): void {
+  const registry = getLocalNoteRegistry(walletAddress);
   registry.lastScannedSlot = Math.max(registry.lastScannedSlot, slot);
-  saveLocalNoteRegistry(registry);
+  saveLocalNoteRegistry(registry, walletAddress);
 }
 
 /**
  * Get entries since a given slot (for incremental scanning)
+ * @param walletAddress - If provided, gets from wallet-specific registry
  */
-export function getEntriesSinceSlot(slot: number): NoteRegistryEntry[] {
-  const registry = getLocalNoteRegistry();
+export function getEntriesSinceSlot(slot: number, walletAddress?: string): NoteRegistryEntry[] {
+  const registry = getLocalNoteRegistry(walletAddress);
   return registry.entries.filter(e => e.slot > slot);
 }
 
 /**
  * Clear the note registry (for debugging/reset)
+ * @param walletAddress - If provided, clears wallet-specific registry
  */
-export function clearNoteRegistry(): void {
-  localStorage.removeItem(REGISTRY_STORAGE_KEY);
-  console.log('[NoteRegistry] Cleared all entries');
+export function clearNoteRegistry(walletAddress?: string): void {
+  localStorage.removeItem(getStorageKey(walletAddress));
+  console.log('[NoteRegistry] Cleared all entries', walletAddress ? `for wallet ${walletAddress.slice(0, 8)}...` : '(global)');
 }
 
 /**
  * Prune old entries that have been processed
  * Keeps entries for the last N slots for reorg safety
+ * @param walletAddress - If provided, prunes wallet-specific registry
  */
-export function pruneOldEntries(maxAgeSlots: number = 100000): void {
-  const registry = getLocalNoteRegistry();
+export function pruneOldEntries(maxAgeSlots: number = 100000, walletAddress?: string): void {
+  const registry = getLocalNoteRegistry(walletAddress);
   const cutoffSlot = registry.lastScannedSlot - maxAgeSlots;
   
   const before = registry.entries.length;
@@ -126,7 +143,7 @@ export function pruneOldEntries(maxAgeSlots: number = 100000): void {
   const after = registry.entries.length;
   
   if (before !== after) {
-    saveLocalNoteRegistry(registry);
+    saveLocalNoteRegistry(registry, walletAddress);
     console.log(`[NoteRegistry] Pruned ${before - after} old entries`);
   }
 }

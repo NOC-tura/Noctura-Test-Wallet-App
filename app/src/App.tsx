@@ -361,6 +361,8 @@ export default function App() {
   const importSecret = useWallet((state) => state.importSecret);
   const markAirdrop = useWallet((state) => state.markAirdrop);
   const resetWallet = useWallet((state) => state.reset);
+  const accounts = useWallet((state) => state.accounts);
+  const activeAccountIndex = useWallet((state) => state.activeAccountIndex);
   const shieldedNotes = useShieldedNotes((state) => state.notes);
   const addShieldedNote = useShieldedNotes((state) => state.addNote);
   const markNoteSpent = useShieldedNotes((state) => state.markNoteSpent);
@@ -1620,6 +1622,8 @@ export default function App() {
 
   const [solBalance, setSolBalance] = useState(0);
   const [nocBalance, setNocBalance] = useState(0);
+  // Store transparent balances for ALL wallets (for wallet selector dropdown)
+  const [allTransparentBalances, setAllTransparentBalances] = useState<Record<string, { sol: number; noc: number }>>({});
   const [shieldedKeys, setShieldedKeys] = useState<ShieldedKeyPair | null>(null);
   const shieldedSyncAttempted = useRef(false);
 
@@ -1646,6 +1650,37 @@ export default function App() {
     
     return { shieldedSolBalance: totalSol, shieldedNocBalance: totalNoc, corruptedNotesCount: corruptedCount };
   }, [keypair, shieldedNotes]);
+
+  // Calculate balances for ALL wallets (for wallet selector dropdown)
+  const allWalletBalances = useMemo(() => {
+    const balances: Record<string, { transparentSol: number; transparentNoc: number; shieldedSol: number; shieldedNoc: number }> = {};
+    
+    for (const account of accounts) {
+      const address = account.publicAddress;
+      
+      // Get shielded notes for this wallet
+      const walletNotes = shieldedNotes.filter((note) => note.owner === address && !note.spent);
+      const solNotes = filterCorruptedNotes(walletNotes.filter((n) => n.tokenType === 'SOL'));
+      const nocNotes = filterCorruptedNotes(walletNotes.filter((n) => n.tokenType === 'NOC' || !n.tokenType));
+      
+      const shieldedSol = solNotes.reduce((sum, n) => sum + Number(BigInt(n.amount)), 0) / LAMPORTS_PER_SOL;
+      const shieldedNoc = nocNotes.reduce((sum, n) => sum + Number(BigInt(n.amount)), 0) / 1_000_000;
+      
+      // Use cached transparent balances for all wallets
+      // Current wallet uses live state, others use cached values
+      const isCurrentWallet = keypair?.publicKey.toBase58() === address;
+      const cachedBalance = allTransparentBalances[address];
+      
+      balances[address] = {
+        transparentSol: isCurrentWallet ? solBalance : (cachedBalance?.sol ?? 0),
+        transparentNoc: isCurrentWallet ? nocBalance : (cachedBalance?.noc ?? 0),
+        shieldedSol,
+        shieldedNoc,
+      };
+    }
+    
+    return balances;
+  }, [accounts, shieldedNotes, keypair, solBalance, nocBalance, allTransparentBalances]);
 
   const [status, setStatus] = useState<string | null>(null);
   const [airdropPending, setAirdropPending] = useState(false);
@@ -1697,11 +1732,58 @@ export default function App() {
       console.log('Balances fetched - SOL:', sol, 'NOC:', noc);
       setSolBalance(sol);
       setNocBalance(noc);
+      
+      // Also update the cached balance for current wallet
+      setAllTransparentBalances(prev => ({
+        ...prev,
+        [keypair.publicKey.toBase58()]: { sol, noc },
+      }));
     } catch (err) {
       console.error('Failed to refresh balances:', err);
       setStatus(`Balance refresh failed: ${(err as Error).message}`);
     }
   }, [keypair]);
+
+  // Fetch transparent balances for ALL wallets (for wallet selector dropdown)
+  const refreshAllWalletBalances = useCallback(async () => {
+    if (accounts.length === 0) return;
+    
+    console.log('[AllWalletBalances] Fetching balances for', accounts.length, 'wallets...');
+    const mintKey = new PublicKey(NOC_TOKEN_MINT);
+    
+    const balancePromises = accounts.map(async (account) => {
+      try {
+        const pubkey = new PublicKey(account.publicAddress);
+        const [sol, noc] = await Promise.all([
+          getSolBalance(pubkey),
+          getTokenBalance(pubkey, mintKey),
+        ]);
+        return { address: account.publicAddress, sol, noc };
+      } catch (err) {
+        console.warn(`[AllWalletBalances] Failed to fetch balance for ${account.publicAddress}:`, err);
+        return { address: account.publicAddress, sol: 0, noc: 0 };
+      }
+    });
+    
+    const results = await Promise.all(balancePromises);
+    const newBalances: Record<string, { sol: number; noc: number }> = {};
+    
+    for (const result of results) {
+      newBalances[result.address] = { sol: result.sol, noc: result.noc };
+    }
+    
+    console.log('[AllWalletBalances] Fetched balances:', newBalances);
+    setAllTransparentBalances(newBalances);
+    
+    // Also update current wallet's balance state
+    if (keypair) {
+      const currentBalance = newBalances[keypair.publicKey.toBase58()];
+      if (currentBalance) {
+        setSolBalance(currentBalance.sol);
+        setNocBalance(currentBalance.noc);
+      }
+    }
+  }, [accounts, keypair]);
 
   // Retry helper with exponential backoff
   const retryWithBackoff = useCallback(async <T,>(
@@ -2015,6 +2097,15 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [keypair, refreshBalances]);
+
+  // Fetch transparent balances for ALL wallets (for wallet selector dropdown)
+  // This runs when accounts list changes or on initial load
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    refreshAllWalletBalances().catch((err) => 
+      console.warn('[AllWalletBalances] Failed to refresh:', err)
+    );
+  }, [accounts.length, refreshAllWalletBalances]);
 
   // Sync shielded notes with on-chain state - mark any spent nullifiers
   // Run only once when keypair changes, not on every note change
@@ -2603,6 +2694,157 @@ export default function App() {
             const totalInputAmount = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
             console.log('[Transfer] Selected notes total:', Number(totalInputAmount) / Math.pow(10, decimals), tokenType);
 
+            // CRITICAL: The transfer-multi circuit requires EXACTLY 4 input notes
+            // If we have fewer, we must consolidate first to get a single note
+            // The circuit pads by duplicating notes which breaks amount conservation
+            if (inputNotes.length < 4) {
+              console.log('[Transfer] ⚠️ Fewer than 4 notes - must consolidate first');
+              setStatus(`Consolidating ${inputNotes.length} notes before transfer... (this takes ~1 min)`);
+              
+              // Consolidate selected notes into one
+              const consolidatedAmount = totalInputAmount;
+              const consolidatedNote = createNoteFromSecrets(consolidatedAmount, tokenType);
+              
+              console.log('[Transfer] Building consolidation witness...');
+              const consolidateWitnessData = buildConsolidationWitness({
+                inputRecords: selectedNotes,
+                outputNote: consolidatedNote,
+                allNotesForMerkle: availableNotes,
+              });
+              
+              console.log('[Transfer] Generating consolidation proof...');
+              const consolidateProof = await proveCircuit('consolidate', consolidateWitnessData);
+              console.log('[Transfer] Consolidation proof generated!');
+              
+              // Submit consolidation to relayer
+              setStatus('Submitting consolidation...');
+              const consolidateResult = await relayConsolidate({
+                proof: consolidateProof,
+                inputNullifiers: inputNotes.map(n => n.nullifier.toString()),
+                outputCommitment: consolidatedNote.commitment.toString(),
+              });
+              console.log('[Transfer] Consolidation submitted:', consolidateResult.signature);
+              
+              // Mark original notes as spent
+              selectedNotes.forEach(note => markNoteSpent(note.nullifier));
+              
+              // Add consolidated note to our tracking
+              const consolidatedRecord: ShieldedNoteRecord = {
+                owner: walletAddress,
+                commitment: consolidatedNote.commitment.toString(),
+                nullifier: consolidatedNote.nullifier.toString(),
+                secret: consolidatedNote.secret.toString(),
+                blinding: consolidatedNote.blinding.toString(),
+                rho: consolidatedNote.rho.toString(),
+                tokenMintAddress: mintKey.toBase58(),
+                tokenMintField: consolidatedNote.tokenMint.toString(),
+                amount: consolidatedNote.amount.toString(),
+                spent: false,
+                leafIndex: -1,
+                createdAt: Date.now(),
+                tokenType: tokenType as 'SOL' | 'NOC',
+              };
+              addShieldedNote(consolidatedRecord);
+              availableNotes.push(consolidatedRecord);
+              
+              // Wait a moment for on-chain state to update
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              // Now use single-note transfer with the consolidated note
+              console.log('[Transfer] Proceeding with single-note transfer using consolidated note');
+              setStatus('Processing transfer with consolidated note...');
+              
+              // Build merkle proof for the consolidated note
+              const merkleProof = buildMerkleProof(availableNotes, consolidatedRecord);
+              
+              const inputNote: Note = {
+                secret: BigInt(consolidatedRecord.secret),
+                amount: BigInt(consolidatedRecord.amount),
+                tokenMint: BigInt(consolidatedRecord.tokenMintField),
+                blinding: BigInt(consolidatedRecord.blinding),
+                rho: BigInt(consolidatedRecord.rho),
+                commitment: BigInt(consolidatedRecord.commitment),
+                nullifier: BigInt(consolidatedRecord.nullifier),
+              };
+              
+              // For single-note transfer, calculate amounts
+              const recipientNoteAmount = atoms + feeAtoms;
+              const changeAmount = consolidatedAmount - recipientNoteAmount;
+              
+              if (changeAmount < 0n) {
+                throw new Error(`Insufficient balance after consolidation. Need ${Number(recipientNoteAmount) / Math.pow(10, decimals)} ${tokenType} but only have ${Number(consolidatedAmount) / Math.pow(10, decimals)} ${tokenType}.`);
+              }
+              
+              const recipientNote = createNoteFromSecrets(recipientNoteAmount, tokenType);
+              const changeNote = createNoteFromSecrets(changeAmount, tokenType);
+              
+              // Use single-note transfer witness
+              const transferWitness = serializeTransferWitness({
+                inputNote,
+                merkleProof,
+                outputNote1: recipientNote,
+                outputNote2: changeNote,
+              });
+              
+              setStatus('Generating transfer proof...');
+              const proof = await proveCircuit('transfer', transferWitness);
+              console.log('[Transfer] Single-note transfer proof generated!');
+              
+              const recipientAta = getAssociatedTokenAddressSync(ataMintKey, recipientKey, true).toBase58();
+              
+              // Store state for the two-step process
+              setPendingWithdrawalProof(proof);
+              setPendingWithdrawalNote(consolidatedRecord);
+              setPendingRecipient(recipientKey.toBase58());
+              setPendingRecipientAta(recipientAta);
+              
+              // Encode shared note and set up review modal
+              const sharedNote = encodeSharedNote(recipientNote, tokenType);
+              const recipientZkHash = await computeZkHash(trimmedRecipient, tokenType, atoms);
+              
+              // Store pending transfer data for confirmation
+              (window as unknown as Record<string, unknown>).__pendingTransfer = {
+                isPartial: changeAmount > 0n,
+                isDeferredProof: false, // Proof already generated
+                inputNote,
+                merkleProof,
+                recipientNote,
+                changeNote,
+                spendNote: consolidatedRecord,
+                recipientKey: recipientKey.toBase58(),
+                recipientAta,
+                atoms,
+                feeAtoms: feeAtoms.toString(),
+                tokenType,
+                parsedAmount,
+                changeAmount,
+                decimals,
+              };
+              
+              setTransferReview({
+                recipient: trimmedRecipient,
+                recipientZkHash,
+                amount: parsedAmount,
+                atoms,
+                feeNoc: 0.25,
+                isPartialSpend: changeAmount > 0n,
+                changeAmount: changeAmount > 0n ? Number(changeAmount) / Math.pow(10, decimals) : undefined,
+                tokenType,
+                sharedNote,
+                transparentPayout,
+                isFullyPrivate: trimmedRecipient.startsWith('noctura1'),
+              });
+              setShieldedSendPending(false);
+              
+              const changeMsg = changeAmount > 0n 
+                ? ` Change: ${(Number(changeAmount) / Math.pow(10, decimals)).toFixed(decimals === 9 ? 9 : 6)} ${tokenType} stays shielded.`
+                : '';
+              setStatus(`Review: Sending ${parsedAmount} ${tokenType} (consolidated from ${selectedNotes.length} notes). Privacy fee: 0.25 NOC.${changeMsg}`);
+              
+              // Skip the rest of the multi-note flow - wait for user confirmation
+              return;
+            }
+
             // For SOL transfers: fee is in NOC (separate check below)
             // For NOC transfers: fee is deducted from NOC amount
             const recipientNoteAmount = atoms + feeAtoms;
@@ -2751,19 +2993,10 @@ export default function App() {
           console.log('[Transfer] ✓ Sufficient NOC for privacy fee');
         }
 
-        // For NOC transfers, verify that we have enough SOL in transparent balance for network fees
-        if (tokenType === 'NOC') {
-          console.log('[Transfer] Checking SOL balance for NOC transfer network fees...');
-          const minSolForFee = 0.00005; // Minimum SOL needed for network fee
-          console.log('[Transfer] Transparent SOL balance:', solBalance, 'SOL, needed:', minSolForFee, 'SOL');
-          if (solBalance < minSolForFee) {
-            const errorMsg = `Insufficient SOL for network fees. Need at least ${minSolForFee} SOL in transparent balance to withdraw ${parsedAmount} NOC from shielded vault. Current transparent balance: ${solBalance} SOL.`;
-            console.error('[Transfer] ❌ INSUFFICIENT SOL FOR FEES:', errorMsg);
-            setStatus(errorMsg);
-            throw new Error(errorMsg);
-          }
-          console.log('[Transfer] ✓ Sufficient SOL for network fees');
-        }
+        // Note: For shielded-to-transparent withdrawals, the RELAYER pays the Solana network fees
+        // User only needs to pay the 0.25 NOC privacy fee (from shielded balance)
+        // No transparent SOL is required!
+        console.log('[Transfer] Relayer will pay Solana network fees for this withdrawal');
         
         setStatus('Building Merkle proof…');
         console.log('[Transfer] About to build Merkle proof with', availableNotes.length, 'available notes');
@@ -3206,129 +3439,131 @@ export default function App() {
         const { inputNote, recipientNote, changeNote, merkleProof, spendNote, recipientPublicKey, trimmedRecipient, tokenType, parsedAmount, changeAmount } = pendingTransfer;
         const walletAddress = keypair.publicKey.toBase58();
         
-        // For NOC transfers: fee is already included in the change calculation (deducted from change)
-        // For SOL transfers: we need to collect a separate 0.25 NOC fee
-        if (tokenType === 'NOC') {
-          // For shielded-to-shielded, fee is NOT subtracted from change note
-          const expectedChange = inputNote.amount - recipientNote.amount;
-          const sumOutputs = recipientNote.amount + changeNote.amount;
-          const sumInputs = inputNote.amount;
-          console.log('[Transfer] Amounts for ZK circuit:', {
-            inputAmount: inputNote.amount.toString(),
-            recipientAmount: recipientNote.amount.toString(),
-            changeAmount: changeNote.amount.toString(),
-            fee: PRIVACY_FEE_ATOMS.toString(),
-            sumInputs: sumInputs.toString(),
-            sumOutputs: sumOutputs.toString(),
-          });
-          if (changeNote.amount !== expectedChange) {
-            console.error('[Transfer] ❌ Change note amount mismatch! Expected:', expectedChange.toString(), 'Actual:', changeNote.amount.toString());
-            setStatus('Error: Change note amount mismatch.');
-            setConfirmingTransfer(false);
-            setTransferReview(null);
-            resetPendingShieldedTransfer();
-            return;
-          }
-          if (sumInputs !== sumOutputs) {
-            console.error('[Transfer] ❌ ZK circuit amount conservation failed! inputNote.amount:', sumInputs.toString(), 'recipientNote.amount + changeNote.amount:', sumOutputs.toString());
-            setStatus('Error: ZK circuit amount conservation failed.');
-            setConfirmingTransfer(false);
-            setTransferReview(null);
-            resetPendingShieldedTransfer();
-            return;
-          }
+        // Validate amounts for ZK circuit (input = outputs, no fee in circuit)
+        const expectedChange = inputNote.amount - recipientNote.amount;
+        const sumOutputs = recipientNote.amount + changeNote.amount;
+        const sumInputs = inputNote.amount;
+        console.log('[Transfer] Amounts for ZK circuit:', {
+          inputAmount: inputNote.amount.toString(),
+          recipientAmount: recipientNote.amount.toString(),
+          changeAmount: changeNote.amount.toString(),
+          fee: PRIVACY_FEE_ATOMS.toString(),
+          sumInputs: sumInputs.toString(),
+          sumOutputs: sumOutputs.toString(),
+        });
+        if (changeNote.amount !== expectedChange) {
+          console.error('[Transfer] ❌ Change note amount mismatch! Expected:', expectedChange.toString(), 'Actual:', changeNote.amount.toString());
+          setStatus('Error: Change note amount mismatch.');
+          setConfirmingTransfer(false);
+          setTransferReview(null);
+          resetPendingShieldedTransfer();
+          return;
+        }
+        if (sumInputs !== sumOutputs) {
+          console.error('[Transfer] ❌ ZK circuit amount conservation failed! inputNote.amount:', sumInputs.toString(), 'recipientNote.amount + changeNote.amount:', sumOutputs.toString());
+          setStatus('Error: ZK circuit amount conservation failed.');
+          setConfirmingTransfer(false);
+          setTransferReview(null);
+          resetPendingShieldedTransfer();
+          return;
         }
         
-        if (tokenType !== 'NOC') {
-          // SOL transfer - need to collect 0.25 NOC fee separately
-          setStatus('Preparing privacy fee (0.25 NOC)...');
+        // Collect 0.25 NOC privacy fee (required for ALL shielded-to-shielded transfers)
+        setStatus('Preparing privacy fee (0.25 NOC)...');
+        
+        // Find a NOC note to pay the fee from (excluding the note being spent in the transfer)
+        const freshNotes = useShieldedNotes.getState().notes;
+        const nocNotes = freshNotes.filter(n => {
+          if (n.spent || n.owner !== walletAddress) return false;
+          // Exclude the note being spent in the main transfer
+          if (n.nullifier === spendNote.nullifier) return false;
+          const isNoc = n.tokenType === 'NOC' || n.tokenMintAddress === NOC_TOKEN_MINT;
+          return isNoc;
+        });
+        
+        const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+        
+        // For NOC transfers, check if change note can cover the fee
+        const canPayFeeFromChange = tokenType === 'NOC' && changeNote.amount >= PRIVACY_FEE_ATOMS;
+        
+        if (!canPayFeeFromChange && (nocNotes.length === 0 || totalNocAvailable < PRIVACY_FEE_ATOMS)) {
+          setStatus('❌ Insufficient NOC for privacy fee. Need 0.25 NOC shielded (separate from transfer amount).');
+          setTransferReview(null);
+          resetPendingShieldedTransfer();
+          throw new Error('Insufficient NOC in vault for privacy fee. Need 0.25 NOC shielded separately to pay for private transfers.');
+        }
+        
+        // Look for an EXACT 0.25 NOC note (withdraw circuit requires full amount)
+        let exactFeeNote = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
+        
+        if (!exactFeeNote && !canPayFeeFromChange) {
+          // No exact fee note - create one from a larger NOC note first
+          console.log('[Transfer] No exact 0.25 NOC fee note found - creating one...');
           
-          // Find a NOC note to pay the fee from
-          const freshNotes = useShieldedNotes.getState().notes;
-          const nocNotes = freshNotes.filter(n => {
-            if (n.spent || n.owner !== walletAddress) return false;
-            const isNoc = n.tokenType === 'NOC' || n.tokenMintAddress === NOC_TOKEN_MINT;
-            return isNoc;
-          });
+          const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
           
-          const totalNocAvailable = nocNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
-          if (nocNotes.length === 0 || totalNocAvailable < PRIVACY_FEE_ATOMS) {
-            setStatus('❌ Insufficient NOC for privacy fee. Need 0.25 NOC shielded.');
+          if (!splittableNote) {
+            setStatus('❌ Cannot create fee note: no NOC note larger than 0.25 NOC available.');
             setTransferReview(null);
             resetPendingShieldedTransfer();
-            throw new Error('Insufficient NOC in vault for privacy fee. Need 0.25 NOC shielded to pay for private transfers. Please deposit NOC first.');
+            throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available.');
           }
           
-          // Look for an EXACT 0.25 NOC note (withdraw circuit requires full amount)
-          let exactFeeNote = nocNotes.find(n => BigInt(n.amount) === PRIVACY_FEE_ATOMS);
+          console.log('[Transfer] Splitting note:', Number(BigInt(splittableNote.amount)) / 1e6, 'NOC');
+          setStatus('Creating 0.25 NOC fee note from vault...');
           
-          if (!exactFeeNote) {
-            // No exact fee note - create one from a larger NOC note first
-            console.log('[Transfer] No exact 0.25 NOC fee note found - creating one...');
-            
-            const splittableNote = nocNotes.find(n => BigInt(n.amount) > PRIVACY_FEE_ATOMS);
-            
-            if (!splittableNote) {
-              setStatus('❌ Cannot create fee note: no NOC note larger than 0.25 NOC available.');
-              setTransferReview(null);
-              resetPendingShieldedTransfer();
-              throw new Error('Cannot create fee note: no NOC note larger than 0.25 NOC available.');
-            }
-            
-            console.log('[Transfer] Splitting note:', Number(BigInt(splittableNote.amount)) / 1e6, 'NOC');
-            setStatus('Creating 0.25 NOC fee note from vault...');
-            
-            const allUnspent = useShieldedNotes.getState().notes.filter(
-              n => n.owner === walletAddress && !n.spent
-            );
-            
-            const splitInputNote: Note = {
-              secret: BigInt(splittableNote.secret),
-              amount: BigInt(splittableNote.amount),
-              tokenMint: getCorrectTokenMint(splittableNote),
-              blinding: BigInt(splittableNote.blinding),
-              rho: BigInt(splittableNote.rho),
-              commitment: BigInt(splittableNote.commitment),
-              nullifier: BigInt(splittableNote.nullifier),
-            };
-            
-            const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
-            
-            const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
-            const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
-            const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
-            
-            const splitWitness = serializeTransferWitness({
-              inputNote: splitInputNote,
-              merkleProof: splitMerkleProof,
-              outputNote1: newFeeNote,
-              outputNote2: splitChangeNote,
-            });
-            
-            console.log('[Transfer] Generating proof to split note...');
-            const splitProof = await proveCircuit('transfer', splitWitness);
-            
-            const splitResult = await relayTransfer({
-              proof: splitProof,
-              nullifier: splittableNote.nullifier,
-              outputCommitment1: newFeeNote.commitment.toString(),
-              outputCommitment2: splitChangeNote.commitment.toString(),
-            });
-            
-            console.log('[Transfer] ✅ Created fee note:', splitResult.signature);
-            
-            markNoteSpent(splittableNote.nullifier);
-            
-            const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
-            const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
-            addShieldedNote(feeNoteRecord);
-            addShieldedNote(changeNoteRecord);
-            
-            exactFeeNote = feeNoteRecord;
-            await new Promise(r => setTimeout(r, 200));
-          }
+          const allUnspent = useShieldedNotes.getState().notes.filter(
+            n => n.owner === walletAddress && !n.spent
+          );
           
-          // Collect the 0.25 NOC fee
+          const splitInputNote: Note = {
+            secret: BigInt(splittableNote.secret),
+            amount: BigInt(splittableNote.amount),
+            tokenMint: getCorrectTokenMint(splittableNote),
+            blinding: BigInt(splittableNote.blinding),
+            rho: BigInt(splittableNote.rho),
+            commitment: BigInt(splittableNote.commitment),
+            nullifier: BigInt(splittableNote.nullifier),
+          };
+          
+          const splitMerkleProof = buildMerkleProof(allUnspent, splittableNote);
+          
+          const newFeeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
+          const splitChangeAmount = BigInt(splittableNote.amount) - PRIVACY_FEE_ATOMS;
+          const splitChangeNote = createNoteFromSecrets(splitChangeAmount, 'NOC');
+          
+          const splitWitness = serializeTransferWitness({
+            inputNote: splitInputNote,
+            merkleProof: splitMerkleProof,
+            outputNote1: newFeeNote,
+            outputNote2: splitChangeNote,
+          });
+          
+          console.log('[Transfer] Generating proof to split note for fee...');
+          const splitProof = await proveCircuit('transfer', splitWitness);
+          
+          const splitResult = await relayTransfer({
+            proof: splitProof,
+            nullifier: splittableNote.nullifier,
+            outputCommitment1: newFeeNote.commitment.toString(),
+            outputCommitment2: splitChangeNote.commitment.toString(),
+          });
+          
+          console.log('[Transfer] ✅ Created fee note:', splitResult.signature);
+          
+          markNoteSpent(splittableNote.nullifier);
+          
+          const feeNoteRecord = snapshotNote(newFeeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+          const changeNoteRecord = snapshotNote(splitChangeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+          addShieldedNote(feeNoteRecord);
+          addShieldedNote(changeNoteRecord);
+          
+          exactFeeNote = feeNoteRecord;
+          await new Promise(r => setTimeout(r, 200));
+        }
+        
+        // Collect the 0.25 NOC fee via withdraw to fee collector
+        if (exactFeeNote) {
           setStatus('Collecting privacy fee (0.25 NOC)...');
           console.log('[Transfer] Collecting 0.25 NOC fee note');
           
@@ -3375,8 +3610,8 @@ export default function App() {
             throw new Error('Failed to collect privacy fee. Please try again.');
           }
         } else {
-          // NOC transfer - fee is already included in the change (deducted during preparation)
-          console.log('[Transfer] NOC transfer - fee already deducted from change, no separate fee collection needed');
+          // Fee will be collected by relayer from the change note (deferred)
+          console.log('[Transfer] Fee will be collected from change note by relayer');
         }
         
         // Now generate transfer proof
@@ -5664,7 +5899,7 @@ export default function App() {
                   amount: amountSol.toFixed(6),
                   token: 'SOL',
                   from: sender,
-                  to: 'Transparent Wallet',
+                  to: walletAddress.slice(0, 8) + '...' + walletAddress.slice(-4),
                   isShielded: false,
                   walletAddress,
                 });
@@ -5717,7 +5952,7 @@ export default function App() {
                   amount: nocDiff.toFixed(6),
                   token: 'NOC',
                   from: sender,
-                  to: 'Transparent Wallet',
+                  to: walletAddress.slice(0, 8) + '...' + walletAddress.slice(-4),
                   isShielded: false,
                   walletAddress,
                 });
@@ -6466,6 +6701,11 @@ export default function App() {
         walletAddress={keypair?.publicKey.toBase58() || ''}
         shieldedAddress={shieldedKeys?.shieldedAddress}
         onModeChange={handleModeToggle}
+        onWalletSwitch={() => {
+          // Refresh balances when wallet is switched
+          refreshBalances?.();
+        }}
+        walletBalances={allWalletBalances}
         onReceive={() => {
           // Receive is automatically handled by dashboard modal
         }}

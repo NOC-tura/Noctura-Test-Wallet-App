@@ -4,6 +4,14 @@ import { useCallback, useState, useRef, useEffect } from 'react';
 import QRCode from 'qrcode';
 import '../styles/dashboard.css';
 import HowToUseModal from './HowToUseModal';
+import { WalletSelector } from './WalletSelector';
+
+interface WalletBalance {
+  transparentSol: number;
+  transparentNoc: number;
+  shieldedSol: number;
+  shieldedNoc: number;
+}
 
 interface DashboardProps {
   mode: 'transparent' | 'shielded';
@@ -21,6 +29,10 @@ interface DashboardProps {
   onRequestSolFaucet?: () => void;
   onFetchTransactions?: () => Promise<Array<{ signature: string; slot: number; timestamp: number; err: any; memo?: string }>>;
   onShieldDeposit?: (token: 'SOL' | 'NOC', amount: string) => void;
+  /** Optional callback when wallet is switched */
+  onWalletSwitch?: () => void;
+  /** Optional balances for all wallets (keyed by public address) */
+  walletBalances?: Record<string, WalletBalance>;
 }
 
 export function Dashboard({
@@ -39,6 +51,8 @@ export function Dashboard({
   onRequestSolFaucet,
   onFetchTransactions,
   onShieldDeposit,
+  onWalletSwitch,
+  walletBalances = {},
 }: DashboardProps) {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
@@ -187,8 +201,8 @@ export function Dashboard({
         {/* Main Content */}
         <div className="flex-1 dashboard-bg relative">
           <div className="relative z-10 p-4 pt-2 flex flex-col h-full">
-            {/* Header */}
-            <div className="flex justify-between items-center mb-2">
+            {/* Header - higher z-index to ensure dropdown appears above balance card */}
+            <div className="flex justify-between items-center mb-2 relative z-[200]">
               {/* Left: Logo + Title */}
               <div className="flex items-center gap-4">
                 <h1 className="text-2xl font-bold text-white flex items-center gap-4">
@@ -197,48 +211,30 @@ export function Dashboard({
                 </h1>
               </div>
 
-              {/* Right: Wallet Address with Copy */}
+              {/* Right: Wallet Selector + Address with Copy */}
               <div className={`flex items-center gap-3 bg-[#1a1f3a]/60 backdrop-blur-md border ${themeBorder} rounded-xl px-4 py-2`}>
-                {/* Transparent Address Window */}
-                <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
-                  <div className="flex flex-col items-end gap-1">
-                    <span className="text-xs text-gray-400">wallet</span>
-                    <span className={`text-sm font-mono ${themeText}`}>{walletAddress.slice(0, 7)}...{walletAddress.slice(-5)}</span>
-                  </div>
-                  <button
-                    onClick={handleCopyAddress}
-                    className="ml-2 p-1.5 hover:bg-[#00f0ff]/10 rounded-lg transition"
-                    title="Copy address"
-                  >
-                    {copiedAddress ? (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                      </svg>
-                    ) : (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
-                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-                        <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                {/* Shielded Address Window (only in shielded mode) */}
-                {!isTransparent && shieldedAddress && (
-                  <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1 ml-2">
+                {/* Multi-Wallet Selector */}
+                <WalletSelector 
+                  themeColor={themeColor}
+                  onWalletSwitch={onWalletSwitch}
+                  balances={walletBalances}
+                  mode={mode}
+                />
+                
+                {/* Address Window - shows transparent in transparent mode, shielded in shielded mode */}
+                {isTransparent ? (
+                  /* Transparent Address Window */
+                  <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
                     <div className="flex flex-col items-end gap-1">
-                      <span className="text-xs text-gray-400">shielded</span>
-                      <span className={`text-sm font-mono ${themeText}`}>{shieldedAddress.slice(0, 10)}...{shieldedAddress.slice(-6)}</span>
+                      <span className="text-xs text-gray-400">wallet</span>
+                      <span className={`text-sm font-mono ${themeText}`}>{walletAddress.slice(0, 7)}...{walletAddress.slice(-5)}</span>
                     </div>
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(shieldedAddress);
-                        setCopiedShieldedAddress(true);
-                        setTimeout(() => setCopiedShieldedAddress(false), 2000);
-                      }}
-                      className="ml-2 p-1.5 hover:bg-[#8b5cf6]/10 rounded-lg transition"
-                      title="Copy shielded address"
+                      onClick={handleCopyAddress}
+                      className="ml-2 p-1.5 hover:bg-[#00f0ff]/10 rounded-lg transition"
+                      title="Copy address"
                     >
-                      {copiedShieldedAddress ? (
+                      {copiedAddress ? (
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
                           <polyline points="20 6 9 17 4 12"></polyline>
                         </svg>
@@ -250,12 +246,42 @@ export function Dashboard({
                       )}
                     </button>
                   </div>
+                ) : (
+                  /* Shielded Address Window (only in shielded mode) */
+                  shieldedAddress && (
+                    <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="text-xs text-gray-400">shielded</span>
+                        <span className={`text-sm font-mono ${themeText}`}>{shieldedAddress.slice(0, 10)}...{shieldedAddress.slice(-6)}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(shieldedAddress);
+                          setCopiedShieldedAddress(true);
+                          setTimeout(() => setCopiedShieldedAddress(false), 2000);
+                        }}
+                        className="ml-2 p-1.5 hover:bg-[#8b5cf6]/10 rounded-lg transition"
+                        title="Copy shielded address"
+                      >
+                        {copiedShieldedAddress ? (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                          </svg>
+                        ) : (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
+                            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  )
                 )}
               </div>
             </div>
 
-            {/* Main Content Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1">
+            {/* Main Content Grid - lower z-index than header */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 relative z-[10]">
               {/* Left: Balance Card */}
               <div className="lg:col-span-2">
                 {/* Mode Toggle - Inside Balance Widget Area */}
@@ -786,6 +812,12 @@ export function Dashboard({
                         labelColor = 'bg-purple-900/50';
                       }
                     }
+                    
+                    // Get amount and token from transaction
+                    const txAmount = (tx as any).amount;
+                    const txToken = (tx as any).token;
+                    const txFrom = (tx as any).from;
+                    const txTo = (tx as any).to;
 
                     return (
                       <div 
@@ -801,8 +833,23 @@ export function Dashboard({
                             </div>
                             <p className="text-xs text-neutral-400 mt-1">{date}</p>
                           </div>
-                          <span className="text-xs text-neutral-500">#{idx + 1}</span>
+                          <div className="text-right">
+                            {txAmount && (
+                              <p className={`text-sm font-semibold ${txType?.includes('receive') ? 'text-green-400' : txType?.includes('send') || txType?.includes('withdraw') ? 'text-red-400' : 'text-neutral-200'}`}>
+                                {txType?.includes('receive') ? '+' : txType?.includes('send') || txType?.includes('withdraw') ? '-' : ''}{txAmount} {txToken || 'NOC'}
+                              </p>
+                            )}
+                            <span className="text-xs text-neutral-500">#{idx + 1}</span>
+                          </div>
                         </div>
+                        
+                        {/* From/To addresses */}
+                        {(txFrom || txTo) && (
+                          <div className="text-xs text-neutral-400 mb-2 space-y-1">
+                            {txFrom && <p>From: <span className="text-neutral-300">{txFrom}</span></p>}
+                            {txTo && <p>To: <span className="text-neutral-300">{txTo}</span></p>}
+                          </div>
+                        )}
                         
                         <div className="flex items-center gap-2 mt-2">
                           <a

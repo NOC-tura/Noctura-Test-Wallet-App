@@ -12,6 +12,7 @@ import {
 } from '@solana/spl-token';
 import { mnemonicToSeedSync, validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
+import { HDKey } from '@scure/bip32';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { HeliusRpcUrl, NOC_TOKEN_MINT, SHIELD_PROGRAM_ID } from './constants';
@@ -86,6 +87,45 @@ export function mnemonicToKeypair(mnemonic: string, passphrase = ''): Keypair {
 
 export function generateNewMnemonic(): string {
   return generateMnemonic(wordlist, 128);
+}
+
+/**
+ * Derive a Solana keypair from mnemonic using HD derivation with a specific account index.
+ * Uses BIP-44 path: m/44'/501'/accountIndex'/0'
+ * - 44' = BIP-44 purpose
+ * - 501' = Solana coin type
+ * - accountIndex' = account number (0 for main wallet, 1+ for additional wallets)
+ * - 0' = change index (always 0 for Solana)
+ * 
+ * @param mnemonic - 12 or 24 word BIP39 mnemonic
+ * @param accountIndex - Account derivation index (0 = main, 1 = second wallet, etc.)
+ * @param passphrase - Optional BIP39 passphrase
+ * @returns Solana Keypair for the derived account
+ */
+export function mnemonicToKeypairWithIndex(mnemonic: string, accountIndex: number, passphrase = ''): Keypair {
+  if (!validateMnemonic(mnemonic, wordlist)) {
+    throw new Error('Invalid BIP39 mnemonic');
+  }
+  if (accountIndex < 0 || !Number.isInteger(accountIndex)) {
+    throw new Error('Account index must be a non-negative integer');
+  }
+  
+  // Generate 64-byte seed from mnemonic
+  const seed = mnemonicToSeedSync(mnemonic, passphrase);
+  
+  // Create HD key from seed
+  const hdKey = HDKey.fromMasterSeed(seed);
+  
+  // Derive using Solana's BIP-44 path: m/44'/501'/accountIndex'/0'
+  const derivationPath = `m/44'/501'/${accountIndex}'/0'`;
+  const derived = hdKey.derive(derivationPath);
+  
+  if (!derived.privateKey) {
+    throw new Error('Failed to derive private key');
+  }
+  
+  // Use the 32-byte private key as seed for Solana keypair
+  return Keypair.fromSeed(derived.privateKey);
 }
 
 export function secretKeyToKeypair(secret: string): Keypair {

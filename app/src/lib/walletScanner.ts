@@ -49,6 +49,7 @@ export interface DecryptedIncomingNote {
 let scannerInterval: NodeJS.Timeout | null = null;
 let isScanning = false;
 let onNewNoteCallback: ((note: DecryptedIncomingNote) => void) | null = null;
+let currentKeypairPublicKey: string | null = null; // Track which wallet is being scanned
 
 /**
  * Start the background scanner
@@ -57,14 +58,23 @@ export function startScanner(
   keypair: Keypair,
   onNewNote: (note: DecryptedIncomingNote) => void
 ): void {
+  const newPublicKey = keypair.publicKey.toBase58();
+  
+  // If scanner is running for a different wallet, stop it first
+  if (scannerInterval && currentKeypairPublicKey !== newPublicKey) {
+    console.log('[Scanner] Wallet changed, restarting scanner for new wallet:', newPublicKey.slice(0, 8) + '...');
+    stopScanner();
+  }
+  
   if (scannerInterval) {
-    console.log('[Scanner] Already running');
+    console.log('[Scanner] Already running for this wallet');
     return;
   }
   
+  currentKeypairPublicKey = newPublicKey;
   onNewNoteCallback = onNewNote;
   
-  console.log('[Scanner] Starting background scanner...');
+  console.log('[Scanner] Starting background scanner for wallet:', newPublicKey.slice(0, 8) + '...');
   
   // Initial scan
   scanForIncomingNotes(keypair).catch(err => {
@@ -87,6 +97,7 @@ export function stopScanner(): void {
     clearInterval(scannerInterval);
     scannerInterval = null;
     onNewNoteCallback = null;
+    currentKeypairPublicKey = null;
     console.log('[Scanner] Stopped');
   }
 }
@@ -109,10 +120,11 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
   
   isScanning = true;
   const connection = new Connection(SOLANA_RPC, 'confirmed');
-  const registry = getLocalNoteRegistry();
+  const walletAddress = keypair.publicKey.toBase58();
+  const registry = getLocalNoteRegistry(walletAddress); // Per-wallet registry
   
   try {
-    console.log('[Scanner] Scanning for new notes since slot:', registry.lastScannedSlot);
+    console.log('[Scanner] Scanning for wallet:', walletAddress.slice(0, 8), '... since slot:', registry.lastScannedSlot);
     
     // Get recent signatures for the Noctura program
     const nocturaSigs = await connection.getSignaturesForAddress(
@@ -204,14 +216,14 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
             
             notesForMe.push(incoming);
             
-            // Add to registry
+            // Add to registry (per-wallet)
             addNoteRegistryEntry({
               commitment,
               encryptedNote: encryptedData,
               slot: sigInfo.slot,
               signature: sigInfo.signature,
               createdAt: Date.now(),
-            });
+            }, walletAddress);
             
             // Notify callback
             if (onNewNoteCallback) {
@@ -224,11 +236,11 @@ export async function scanForIncomingNotes(keypair: Keypair): Promise<ScanResult
       }
     }
     
-    // Update last scanned slot
+    // Update last scanned slot (per-wallet)
     const maxSlot = Math.max(...signatures.map(s => s.slot));
-    updateLastScannedSlot(maxSlot);
+    updateLastScannedSlot(maxSlot, walletAddress);
     
-    console.log('[Scanner] Scan complete. Found', notesForMe.length, 'notes for me out of', newNotesFound, 'total');
+    console.log('[Scanner] Scan complete for wallet:', walletAddress.slice(0, 8), '... Found', notesForMe.length, 'notes for me out of', newNotesFound, 'total');
     
     return {
       newNotesFound,
