@@ -145,8 +145,8 @@ export function Dashboard({
 
   return (
     <>
-      {/* HOW TO USE Button on the left */}
-      <div className="fixed left-1/2 top-8 z-40 -translate-x-1/2 flex items-center justify-center">
+      {/* HOW TO USE Button - hidden on mobile, visible on md+ */}
+      <div className="hidden md:flex fixed left-1/2 top-8 z-40 -translate-x-1/2 items-center justify-center">
         <button
           className="px-4 py-1.5 rounded-lg bg-[#101a2f] border-2 border-[#00f0ff] text-[#00f0ff] font-bold shadow-lg hover:bg-[#00f0ff] hover:text-[#101a2f] transition text-base"
           style={{ letterSpacing: '0.08em', minWidth: 120 }}
@@ -157,8 +157,8 @@ export function Dashboard({
       </div>
 
       <div className="flex h-screen bg-[#0a0e27]" style={{ '--theme-color': themeColor } as React.CSSProperties}>
-        {/* Sidebar */}
-        <div className="sidebar">
+        {/* Sidebar - hidden on mobile */}
+        <div className="sidebar hidden md:flex">
           {/* Logo at top */}
           <div className="sidebar-logo mb-4">
             <img src="/NOC2.png" alt="Noctura" className="w-10 h-10 rounded-full" />
@@ -199,20 +199,27 @@ export function Dashboard({
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 dashboard-bg relative">
-          <div className="relative z-10 p-4 pt-2 flex flex-col h-full">
+        <div className="flex-1 dashboard-bg relative overflow-y-auto">
+          <div className="relative z-10 p-2 md:p-4 pt-2 flex flex-col min-h-full pb-20 md:pb-4">
             {/* Header - higher z-index to ensure dropdown appears above balance card */}
-            <div className="flex justify-between items-center mb-2 relative z-[200]">
-              {/* Left: Logo + Title */}
-              <div className="flex items-center gap-4">
-                <h1 className="text-2xl font-bold text-white flex items-center gap-4">
-                  <img src="/NOC1.png" alt="Noctura" className="h-36 w-auto" />
-                  <span className="text-4xl" style={{ marginTop: '-10px' }}>Wallet</span>
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 mb-2 relative z-[200]">
+              {/* Left: Logo + Title - smaller on mobile */}
+              <div className="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-start">
+                <h1 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2 md:gap-4">
+                  <img src="/NOC1.png" alt="Noctura" className="h-16 md:h-36 w-auto" />
+                  <span className="text-2xl md:text-4xl" style={{ marginTop: '-5px' }}>Wallet</span>
                 </h1>
+                {/* Mobile HOW TO USE button */}
+                <button
+                  className="md:hidden px-2 py-1 rounded-lg bg-[#101a2f] border border-[#00f0ff] text-[#00f0ff] text-xs font-bold"
+                  onClick={() => setHowToUseOpen(true)}
+                >
+                  ?
+                </button>
               </div>
 
               {/* Right: Wallet Selector + Address with Copy */}
-              <div className={`flex items-center gap-3 bg-[#1a1f3a]/60 backdrop-blur-md border ${themeBorder} rounded-xl px-4 py-2`}>
+              <div className={`flex items-center gap-2 md:gap-3 bg-[#1a1f3a]/60 backdrop-blur-md border ${themeBorder} rounded-xl px-2 md:px-4 py-2 w-full md:w-auto`}>
                 {/* Multi-Wallet Selector */}
                 <WalletSelector 
                   themeColor={themeColor}
@@ -221,10 +228,10 @@ export function Dashboard({
                   mode={mode}
                 />
                 
-                {/* Address Window - shows transparent in transparent mode, shielded in shielded mode */}
+                {/* Address Window - hidden on mobile, shows transparent in transparent mode, shielded in shielded mode */}
                 {isTransparent ? (
-                  /* Transparent Address Window */
-                  <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
+                  /* Transparent Address Window - hidden on mobile */
+                  <div className="hidden md:flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
                     <div className="flex flex-col items-end gap-1">
                       <span className="text-xs text-gray-400">wallet</span>
                       <span className={`text-sm font-mono ${themeText}`}>{walletAddress.slice(0, 7)}...{walletAddress.slice(-5)}</span>
@@ -247,9 +254,9 @@ export function Dashboard({
                     </button>
                   </div>
                 ) : (
-                  /* Shielded Address Window (only in shielded mode) */
+                  /* Shielded Address Window (only in shielded mode) - hidden on mobile */
                   shieldedAddress && (
-                    <div className="flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
+                    <div className="hidden md:flex items-center gap-2 bg-[#1a1f3a]/60 backdrop-blur-md border rounded-xl px-3 py-1">
                       <div className="flex flex-col items-end gap-1">
                         <span className="text-xs text-gray-400">shielded</span>
                         <span className={`text-sm font-mono ${themeText}`}>{shieldedAddress.slice(0, 10)}...{shieldedAddress.slice(-6)}</span>
@@ -281,7 +288,7 @@ export function Dashboard({
             </div>
 
             {/* Main Content Grid - lower z-index than header */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 relative z-[10]">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4 flex-1 relative z-[10]">
               {/* Left: Balance Card */}
               <div className="lg:col-span-2">
                 {/* Mode Toggle - Inside Balance Widget Area */}
@@ -1058,6 +1065,53 @@ export function Dashboard({
 
         {/* How To Use Modal */}
         <HowToUseModal open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
+        
+        {/* Mobile Bottom Navigation - only visible on mobile */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[#0d1225]/95 backdrop-blur-md border-t border-white/10 z-50">
+          <div className="flex justify-around items-center py-3 px-4">
+            <button className="flex flex-col items-center gap-1 text-[#00f0ff]" title="Portfolio">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+                <path d="M16 4H8a2 2 0 0 0-2 2v2h12V6a2 2 0 0 0-2-2z"/>
+              </svg>
+              <span className="text-[10px]">Portfolio</span>
+            </button>
+            <button 
+              className="flex flex-col items-center gap-1 text-[#00f0ff]" 
+              title="Activity"
+              onClick={async () => {
+                if (onFetchTransactions) {
+                  setShowActivityModal(true);
+                  setLoadingTransactions(true);
+                  try {
+                    const txs = await onFetchTransactions();
+                    setTransactions(txs);
+                  } catch (err) {
+                    console.error('Failed to fetch transactions:', err);
+                  } finally {
+                    setLoadingTransactions(false);
+                  }
+                }
+              }}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 12h18M3 6h18M3 18h18"/>
+              </svg>
+              <span className="text-[10px]">Activity</span>
+            </button>
+            <button 
+              className="flex flex-col items-center gap-1 text-[#00f0ff]" 
+              title="Settings"
+              onClick={() => setShowPrivacySettings(true)}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+              <span className="text-[10px]">Settings</span>
+            </button>
+          </div>
+        </div>
       </div>
     </>
   );

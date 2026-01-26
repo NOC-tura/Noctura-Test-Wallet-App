@@ -149,10 +149,11 @@ export function WalletSelector({
   const dropdownContent = isOpen ? createPortal(
     <div 
       ref={dropdownRef}
-      className="fixed w-80 rounded-xl bg-[#0d1225] border border-white/10 shadow-2xl overflow-hidden"
+      className="fixed w-[calc(100vw-16px)] md:w-80 max-w-80 rounded-xl bg-[#0d1225] border border-white/10 shadow-2xl overflow-hidden"
       style={{ 
         top: dropdownPosition.top,
-        left: dropdownPosition.left,
+        left: window.innerWidth < 768 ? 8 : dropdownPosition.left,
+        right: window.innerWidth < 768 ? 8 : 'auto',
         zIndex: 99999,
         boxShadow: `0 8px 32px rgba(0,0,0,0.6), 0 0 20px ${themeColor}10`
       }}
