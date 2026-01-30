@@ -33,6 +33,10 @@ interface DashboardProps {
   onWalletSwitch?: () => void;
   /** Optional balances for all wallets (keyed by public address) */
   walletBalances?: Record<string, WalletBalance>;
+  /** Whether the wallet is encrypted with password */
+  isEncrypted?: boolean;
+  /** Callback to lock the wallet */
+  onLock?: () => void;
 }
 
 export function Dashboard({
@@ -53,6 +57,8 @@ export function Dashboard({
   onShieldDeposit,
   onWalletSwitch,
   walletBalances = {},
+  isEncrypted = false,
+  onLock,
 }: DashboardProps) {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
@@ -143,6 +149,51 @@ export function Dashboard({
 
   const sendDisabled = !sendAmount || !sendRecipient || isNaN(parseFloat(sendAmount));
 
+  // Calculate if user has insufficient funds for the transaction
+  const parsedSendAmount = parseFloat(sendAmount) || 0;
+  const PRIVACY_FEE_NOC = 0.25;
+  const NETWORK_FEE_SOL = 0.000005;
+  
+  // Balance checks based on mode and token
+  const getInsufficientFundsWarning = (): string | null => {
+    if (!sendAmount || parsedSendAmount <= 0) return null;
+    
+    if (isTransparent) {
+      // Transparent mode: check transparent balance + SOL for network fee
+      if (sendToken === 'SOL') {
+        const totalNeeded = parsedSendAmount + NETWORK_FEE_SOL;
+        if (totalNeeded > solBalance) {
+          return `Insufficient SOL. You need ${totalNeeded.toFixed(6)} SOL (${parsedSendAmount} + ~${NETWORK_FEE_SOL} network fee) but have ${solBalance.toFixed(6)} SOL.`;
+        }
+      } else {
+        // NOC transfer
+        if (parsedSendAmount > nocBalance) {
+          return `Insufficient NOC. You have ${nocBalance.toFixed(2)} NOC but trying to send ${parsedSendAmount}.`;
+        }
+        if (solBalance < NETWORK_FEE_SOL) {
+          return `Insufficient SOL for network fee. You need ~${NETWORK_FEE_SOL} SOL but have ${solBalance.toFixed(6)} SOL.`;
+        }
+      }
+    } else {
+      // Shielded mode: check shielded balance + privacy fee
+      if (sendToken === 'SOL') {
+        if (parsedSendAmount > shieldedSolBalance) {
+          return `Insufficient shielded SOL. You have ${shieldedSolBalance.toFixed(6)} shielded SOL.`;
+        }
+      } else {
+        // NOC shielded transfer needs amount + 0.25 NOC privacy fee
+        const totalNeeded = parsedSendAmount + PRIVACY_FEE_NOC;
+        if (totalNeeded > shieldedNocBalance) {
+          return `Insufficient shielded NOC. You need ${totalNeeded.toFixed(2)} NOC (${parsedSendAmount} + ${PRIVACY_FEE_NOC} privacy fee) but have ${shieldedNocBalance.toFixed(2)} shielded NOC.`;
+        }
+      }
+    }
+    return null;
+  };
+  
+  const insufficientFundsWarning = getInsufficientFundsWarning();
+  const sendButtonDisabled = sendDisabled || !!insufficientFundsWarning;
+
   return (
     <>
       {/* HOW TO USE Button - hidden on mobile, visible on md+ */}
@@ -196,6 +247,20 @@ export function Dashboard({
               <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"/>
             </svg>
           </div>
+          {/* Lock Wallet Button - only shown if wallet is encrypted */}
+          {isEncrypted && onLock && (
+            <div 
+              className="sidebar-icon" 
+              title="Lock Wallet" 
+              onClick={onLock}
+              style={{ cursor: 'pointer' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0110 0v4"/>
+              </svg>
+            </div>
+          )}
         </div>
 
         {/* Main Content */}
@@ -347,7 +412,9 @@ export function Dashboard({
                       <button
                         className="action-btn"
                         onClick={handleReceiveClick}
-                        title={isTransparent ? 'Receive funds to wallet' : 'Receive private funds to shielded address'}
+                        title={isTransparent 
+                          ? 'Show your public address to receive SOL or NOC' 
+                          : 'Show your shielded address (noctura1...) to receive private transfers'}
                         style={{
                           borderColor: `${themeColor}4D`,
                           color: themeColor,
@@ -361,7 +428,9 @@ export function Dashboard({
                       <button
                         className="action-btn"
                         onClick={handleSendClick}
-                        title={isTransparent ? 'Send transparently' : 'Send shielded funds'}
+                        title={isTransparent 
+                          ? 'Send SOL or NOC publicly (visible on blockchain)' 
+                          : 'Send privately from your shielded balance (hidden from blockchain)'}
                         style={{
                           borderColor: `${themeColor}4D`,
                           color: themeColor,
@@ -370,13 +439,15 @@ export function Dashboard({
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M12 5v14M19 12l-7-7-7 7"/>
                         </svg>
-                        Send
+                        {isTransparent ? 'Send' : 'Send Private'}
                       </button>
                       <button
                         className={`action-btn ${!isTransparent ? 'opacity-50 cursor-not-allowed' : ''}`}
                         onClick={handleShieldClick}
                         disabled={!isTransparent}
-                        title={isTransparent ? 'Shield your funds' : 'Already in shielded mode'}
+                        title={isTransparent 
+                          ? 'Move funds to your private shielded vault (makes them invisible on blockchain)' 
+                          : 'Switch to Transparent mode first to shield more funds'}
                         style={{
                           borderColor: `${themeColor}4D`,
                           color: themeColor,
@@ -385,7 +456,7 @@ export function Dashboard({
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M12 2L4 6v6c0 6 8 8 8 8s8-2 8-8V6l-8-4z" strokeLinejoin="round"/>
                         </svg>
-                        Shield
+                        Make Private
                       </button>
                       {isTransparent && onRequestSolFaucet && (
                         <button
@@ -616,29 +687,6 @@ export function Dashboard({
               </div>
 
               <div className="input-field">
-                <label className="input-label">Amount</label>
-                <input
-                  type="number"
-                  className="input-box"
-                  placeholder="0.00"
-                  value={sendAmount}
-                  onChange={(e) => setSendAmount(e.target.value)}
-                  style={{
-                    borderColor: `${themeColor}33`,
-                    color: themeColor
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = themeColor;
-                    e.target.style.boxShadow = `0 0 16px ${themeColor}33, inset 0 0 8px ${themeColor}0D`;
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = `${themeColor}33`;
-                    e.target.style.boxShadow = 'none';
-                  }}
-                />
-              </div>
-
-              <div className="input-field">
                 <label className="input-label">Token</label>
                 <select
                   className="input-box"
@@ -660,6 +708,29 @@ export function Dashboard({
                   <option value="SOL">Solana (SOL)</option>
                   <option value="NOC">Noctura (NOC)</option>
                 </select>
+              </div>
+
+              <div className="input-field">
+                <label className="input-label">Amount</label>
+                <input
+                  type="number"
+                  className="input-box"
+                  placeholder="0.00"
+                  value={sendAmount}
+                  onChange={(e) => setSendAmount(e.target.value)}
+                  style={{
+                    borderColor: `${themeColor}33`,
+                    color: themeColor
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = themeColor;
+                    e.target.style.boxShadow = `0 0 16px ${themeColor}33, inset 0 0 8px ${themeColor}0D`;
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = `${themeColor}33`;
+                    e.target.style.boxShadow = 'none';
+                  }}
+                />
               </div>
 
               <div className="input-field">
@@ -685,9 +756,31 @@ export function Dashboard({
                 />
               </div>
 
+              {/* Insufficient Funds Warning */}
+              {insufficientFundsWarning && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-3">
+                  <div className="flex items-start gap-2">
+                    <span className="text-red-400 text-lg">⚠️</span>
+                    <p className="text-sm text-red-300">{insufficientFundsWarning}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Fee Info */}
+              {parsedSendAmount > 0 && !insufficientFundsWarning && (
+                <div className="bg-[#1a2744]/50 rounded-lg p-3 mb-3 text-xs text-gray-400">
+                  <p className="font-semibold mb-1" style={{ color: themeColor }}>Transaction Fees:</p>
+                  {isTransparent ? (
+                    <p>Network fee: ~0.000005 SOL</p>
+                  ) : (
+                    <p>Privacy fee: 0.25 NOC (shielded transactions)</p>
+                  )}
+                </div>
+              )}
+
               <button
                 className="btn-primary"
-                disabled={sendDisabled}
+                disabled={sendButtonDisabled}
                 onClick={() => {
                   if (onSendTransaction && sendAmount && sendRecipient) {
                     onSendTransaction(sendToken, sendAmount, sendRecipient);
@@ -1110,6 +1203,20 @@ export function Dashboard({
               </svg>
               <span className="text-[10px]">Settings</span>
             </button>
+            {/* Lock Button - only shown if wallet is encrypted */}
+            {isEncrypted && onLock && (
+              <button 
+                className="flex flex-col items-center gap-1 text-[#00f0ff]" 
+                title="Lock Wallet"
+                onClick={onLock}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0110 0v4"/>
+                </svg>
+                <span className="text-[10px]">Lock</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

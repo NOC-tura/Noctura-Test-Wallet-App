@@ -34,5 +34,29 @@ export interface StoredWallet {
   version?: number;
 }
 
+/**
+ * Encrypted wallet storage structure - stored in localStorage
+ * The actual wallet data is encrypted with the user's password
+ */
+export interface EncryptedWalletStorage {
+  /** Version for encrypted storage format */
+  encryptedVersion: number;
+  /** Salt for PBKDF2 key derivation (hex-encoded) */
+  salt: string;
+  /** IV for AES-GCM (hex-encoded) */
+  iv: string;
+  /** Encrypted wallet data (hex-encoded) */
+  ciphertext: string;
+  /** Authentication tag (hex-encoded) */
+  tag: string;
+  /** Hash of password for quick validation (not the actual password) */
+  passwordHash: string;
+  /** Timestamp of last unlock */
+  lastUnlocked?: number;
+}
+
 /** Current storage format version */
 export const WALLET_STORAGE_VERSION = 2;
+
+/** Current encrypted storage format version */
+export const ENCRYPTED_WALLET_VERSION = 1;

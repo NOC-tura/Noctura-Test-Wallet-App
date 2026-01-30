@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 pub const MAX_TREE_HEIGHT: u8 = 14; // 16k leaves (reduced for account size constraints)
 pub const MAX_ROOT_HISTORY: usize = 32;
-pub const MAX_NULLIFIERS: usize = 256;
+pub const MAX_NULLIFIERS: usize = 256; // Keep at 256 for account compatibility
 pub const MAX_VERIFIER_BYTES: usize = 4096;
 
 #[account]

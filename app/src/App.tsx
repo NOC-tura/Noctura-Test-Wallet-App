@@ -7,6 +7,8 @@ import { useWallet } from './hooks/useWallet';
 import { useShieldedNotes } from './hooks/useShieldedNotes';
 import { useTransactionHistory, getTransactionDisplayInfo, type TransactionRecord, type TransactionType } from './hooks/useTransactionHistory';
 import { Dashboard } from './components/Dashboard';
+import UnlockScreen from './components/UnlockScreen';
+import SetPasswordModal from './components/SetPasswordModal';
 import {
   getSolBalance,
   getTokenBalance,
@@ -354,6 +356,8 @@ export default function App() {
   const stored = useWallet((state) => state.stored);
   const mode = useWallet((state) => state.mode);
   const hasWallet = useWallet((state) => state.hasWallet);
+  const isEncrypted = useWallet((state) => state.isEncrypted);
+  const isLocked = useWallet((state) => state.isLocked);
   const initializeWallet = useWallet((state) => state.initialize);
   const setMode = useWallet((state) => state.setMode);
   const createWallet = useWallet((state) => state.createWallet);
@@ -361,6 +365,8 @@ export default function App() {
   const importSecret = useWallet((state) => state.importSecret);
   const markAirdrop = useWallet((state) => state.markAirdrop);
   const resetWallet = useWallet((state) => state.reset);
+  const lockWallet = useWallet((state) => state.lock);
+  const unlockWallet = useWallet((state) => state.unlock);
   const accounts = useWallet((state) => state.accounts);
   const activeAccountIndex = useWallet((state) => state.activeAccountIndex);
   const shieldedNotes = useShieldedNotes((state) => state.notes);
@@ -368,6 +374,11 @@ export default function App() {
   const markNoteSpent = useShieldedNotes((state) => state.markNoteSpent);
   const markMultipleSpent = useShieldedNotes((state) => state.markMultipleSpent);
   const manualLoadNotes = useShieldedNotes((state) => state.manualLoad);
+
+  // Password modal state for new wallet creation
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [pendingMnemonic, setPendingMnemonic] = useState<string | null>(null);
+  const [pendingImportMnemonic, setPendingImportMnemonic] = useState<string | null>(null);
 
   // Transaction history hooks
   const allTransactions = useTransactionHistory((state) => state.transactions);
@@ -5755,10 +5766,9 @@ export default function App() {
     const trimmed = value.trim();
     if (!trimmed) return;
     try {
-      importMnemonic(trimmed);
-      setOnboardingError(null);
-      setMnemonicInput('');
-      setSecretInput('');
+      // Store the mnemonic and show password modal
+      setPendingImportMnemonic(trimmed);
+      setShowPasswordModal(true);
     } catch (err) {
       setOnboardingError((err as Error).message);
     }
@@ -5778,9 +5788,31 @@ export default function App() {
   };
 
   const handleCreateWallet = () => {
+    // Show password modal - actual wallet creation happens after password is set
+    setShowPasswordModal(true);
+  };
+
+  // Called after user sets password (or skips)
+  const handlePasswordSet = (password: string) => {
     try {
-      const mnemonic = createWallet();
+      const mnemonic = createWallet(password || undefined);
       setMnemonicBackup(mnemonic);
+      setShowPasswordModal(false);
+      setShowImportPanel(false);
+      setOnboardingError(null);
+    } catch (err) {
+      setOnboardingError((err as Error).message);
+    }
+  };
+
+  // Handle import with password
+  const handleImportWithPassword = (password: string) => {
+    if (!pendingImportMnemonic) return;
+    try {
+      importMnemonic(pendingImportMnemonic.trim(), password || undefined);
+      setPendingImportMnemonic(null);
+      setShowPasswordModal(false);
+      setMnemonicInput('');
       setShowImportPanel(false);
       setOnboardingError(null);
     } catch (err) {
@@ -6094,8 +6126,27 @@ export default function App() {
       <div className="fixed inset-0 bg-black/80 backdrop-blur flex items-center justify-center px-4 z-50">
         <div className="bg-surface rounded-2xl max-w-lg w-full p-6 space-y-4">
           <h2 className="text-2xl font-semibold">Save your 12-word recovery phrase</h2>
+          
+          {/* Critical Warning Box */}
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <p className="text-sm text-red-300 font-semibold mb-2">
+                  THIS IS THE ONLY WAY TO RECOVER YOUR WALLET
+                </p>
+                <ul className="text-xs text-red-200 space-y-1 list-disc list-inside">
+                  <li>If you clear browser data, you will need this phrase</li>
+                  <li>If you log out, you will need this phrase</li>
+                  <li>If you switch devices, you will need this phrase</li>
+                  <li>Your shielded funds are ONLY accessible with this phrase</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          
           <p className="text-sm text-neutral-400">
-            Write these words down in order and store them offline. Anyone with this phrase can control your funds.
+            Write these words down in order and store them offline. Never share this phrase - anyone with these words can control your funds.
           </p>
           <div className="grid grid-cols-3 gap-3 font-mono text-sm">
             {mnemonicBackup.split(' ').map((word, idx) => (
@@ -6105,12 +6156,21 @@ export default function App() {
               </div>
             ))}
           </div>
+          
+          {/* Backup Instructions */}
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+            <p className="text-xs text-amber-200">
+              <strong>💡 Tip:</strong> Write these words on paper and store in a secure place. 
+              Do NOT take screenshots or store digitally.
+            </p>
+          </div>
+          
           <div className="flex flex-wrap gap-3 justify-end">
             <button className="px-4 py-2 border border-white/20 rounded-xl text-sm" onClick={handleCopyMnemonic}>
               {copiedMnemonic ? 'Copied!' : 'Copy phrase'}
             </button>
-            <button className="px-4 py-2 bg-neon text-black rounded-xl" onClick={() => setMnemonicBackup(null)}>
-              I wrote it down
+            <button className="px-4 py-2 bg-neon text-black rounded-xl font-semibold" onClick={() => setMnemonicBackup(null)}>
+              I have saved my phrase securely
             </button>
           </div>
         </div>
@@ -6664,7 +6724,53 @@ export default function App() {
           <p className="text-center text-xs text-neutral-500 uppercase tracking-wider">
             🔒 Your wallet is created entirely on your device
           </p>
-
+          
+          {/* Divider */}
+          <div className="flex items-center gap-3 py-2">
+            <div className="flex-1 h-px bg-white/10"></div>
+            <span className="text-xs text-neutral-500 uppercase tracking-wider">or</span>
+            <div className="flex-1 h-px bg-white/10"></div>
+          </div>
+          
+          {/* Import Wallet Section */}
+          <button
+            className="w-full py-3 px-6 rounded-xl border-2 border-neon/50 text-neon font-semibold uppercase tracking-[0.1em] hover:bg-neon/10 transition-all"
+            onClick={() => setShowImportPanel(!showImportPanel)}
+          >
+            {showImportPanel ? 'Hide Import Options' : 'Import Existing Wallet'}
+          </button>
+          
+          {showImportPanel && (
+            <div className="space-y-4 p-4 rounded-xl bg-surface/50 border border-white/10">
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                <p className="text-xs text-amber-300 flex items-start gap-2">
+                  <span className="text-base">⚠️</span>
+                  <span>
+                    <strong>Already have a wallet?</strong> Enter your 12-word recovery phrase below to restore access to your funds, including any shielded balance.
+                  </span>
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs uppercase tracking-widest text-neutral-400">
+                  12-Word Recovery Phrase
+                </label>
+                <textarea
+                  value={mnemonicInput}
+                  onChange={(e) => setMnemonicInput(e.target.value)}
+                  placeholder="Enter your 12-word seed phrase separated by spaces..."
+                  className="w-full h-24 bg-black/60 text-sm p-3 rounded-lg border border-white/10 focus:border-neon/50 focus:outline-none resize-none"
+                />
+                <button
+                  className="w-full py-2 px-4 rounded-lg bg-neon/20 border border-neon/40 text-neon font-semibold hover:bg-neon/30 transition-all disabled:opacity-50"
+                  onClick={() => handleMnemonicImport(mnemonicInput)}
+                  disabled={!mnemonicInput.trim()}
+                >
+                  Restore Wallet
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {onboardingError && (
@@ -6676,6 +6782,33 @@ export default function App() {
     </main>
   );
 
+  // Show unlock screen if wallet exists but is locked
+  if (hasWallet && isLocked) {
+    return (
+      <UnlockScreen
+        onUnlock={unlockWallet}
+        onReset={resetWallet}
+      />
+    );
+  }
+
+  // Show password modal for new wallet creation or import
+  const passwordModalElement = (
+    <SetPasswordModal
+      isOpen={showPasswordModal}
+      onClose={() => {
+        setShowPasswordModal(false);
+        setPendingImportMnemonic(null);
+      }}
+      onSetPassword={pendingImportMnemonic ? handleImportWithPassword : handlePasswordSet}
+      title={pendingImportMnemonic ? "Secure Your Imported Wallet" : "Secure Your New Wallet"}
+      description={pendingImportMnemonic 
+        ? "Create a password to protect your imported wallet." 
+        : "Create a password to protect your wallet. You'll use this password to unlock your wallet each time you return."
+      }
+    />
+  );
+
   if (!hasWallet || forceShowOnboarding) {
     return (
       <>
@@ -6685,6 +6818,7 @@ export default function App() {
         {shieldedConfirmModal}
         {stagedSendModal}
         {transactionConfirmModal}
+        {passwordModalElement}
       </>
     );
   }
@@ -6692,6 +6826,7 @@ export default function App() {
   return (
     <>
       {mockRelayerBanner}
+      {passwordModalElement}
       <Dashboard
         mode={mode}
         solBalance={solBalance}
@@ -6706,6 +6841,8 @@ export default function App() {
           refreshBalances?.();
         }}
         walletBalances={allWalletBalances}
+        isEncrypted={isEncrypted}
+        onLock={isEncrypted ? lockWallet : undefined}
         onReceive={() => {
           // Receive is automatically handled by dashboard modal
         }}

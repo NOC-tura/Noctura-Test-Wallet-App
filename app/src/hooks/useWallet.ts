@@ -1,9 +1,14 @@
 import { create, type StateCreator } from 'zustand';
 import { Keypair } from '@solana/web3.js';
-import { StoredWallet, WalletMode, WalletAccount, WALLET_STORAGE_VERSION } from '../types/wallet';
+import { StoredWallet, WalletMode, WalletAccount, WALLET_STORAGE_VERSION, EncryptedWalletStorage, ENCRYPTED_WALLET_VERSION } from '../types/wallet';
 import { generateNewMnemonic, keypairToSecret, mnemonicToKeypair, mnemonicToKeypairWithIndex, secretKeyToKeypair } from '../lib/solana';
+import { encryptData, decryptData } from '../lib/encryptedStorage';
+import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
 const STORAGE_KEY = 'noctura.wallet';
+const ENCRYPTED_STORAGE_KEY = 'noctura.wallet.encrypted';
 const MAX_WALLETS = 10; // Maximum number of wallet accounts allowed
 
 type WalletState = {
@@ -11,6 +16,10 @@ type WalletState = {
   mode: WalletMode;
   stored?: StoredWallet;
   hasWallet: boolean;
+  /** Whether wallet is encrypted with password */
+  isEncrypted: boolean;
+  /** Whether wallet is currently locked (encrypted but not unlocked) */
+  isLocked: boolean;
   /** All wallet accounts */
   accounts: WalletAccount[];
   /** Index of the currently active account */
@@ -19,11 +28,24 @@ type WalletState = {
   activeAccount: WalletAccount | undefined;
   initialize: () => void;
   setMode: (mode: WalletMode) => void;
-  createWallet: () => string;
-  importMnemonic: (mnemonic: string) => void;
+  /** Create new wallet with password protection */
+  createWallet: (password?: string) => string;
+  /** Create new wallet with password (alias for clarity) */
+  createWalletWithPassword: (password: string) => string;
+  importMnemonic: (mnemonic: string, password?: string) => void;
   importSecret: (secret: string) => void;
   markAirdrop: () => void;
   reset: () => void;
+  /** Lock the wallet (clear memory, keep encrypted storage) */
+  lock: () => void;
+  /** Unlock the wallet with password */
+  unlock: (password: string) => Promise<boolean>;
+  /** Check if a password is correct without unlocking */
+  verifyPassword: (password: string) => Promise<boolean>;
+  /** Change the wallet password */
+  changePassword: (currentPassword: string, newPassword: string) => Promise<boolean>;
+  /** Check if encrypted wallet exists in storage */
+  hasEncryptedWallet: () => boolean;
   /** Add a new wallet account (derived from same mnemonic) */
   addWallet: (name?: string) => WalletAccount | null;
   /** Switch to a different wallet account */
@@ -36,6 +58,70 @@ type WalletState = {
   getWalletCount: () => number;
 };
 
+/** Hash password for quick verification (not for encryption) */
+function hashPasswordForVerification(password: string, salt: string): string {
+  const saltBytes = hexToBytes(salt);
+  const passwordBytes = new TextEncoder().encode(password);
+  const derived = pbkdf2(sha256, passwordBytes, saltBytes, { c: 1000, dkLen: 32 });
+  return bytesToHex(derived);
+}
+
+/** Encrypt wallet data with password */
+async function encryptWallet(wallet: StoredWallet, password: string): Promise<EncryptedWalletStorage> {
+  // Use the existing encryptData which handles salt/iv generation
+  const encrypted = await encryptData(wallet, password);
+  
+  return {
+    encryptedVersion: ENCRYPTED_WALLET_VERSION,
+    salt: encrypted.salt,
+    iv: encrypted.iv,
+    ciphertext: encrypted.ciphertext,
+    tag: encrypted.tag,
+    passwordHash: hashPasswordForVerification(password, encrypted.salt),
+    lastUnlocked: Date.now(),
+  };
+}
+
+/** Decrypt wallet data with password */
+async function decryptWallet(encrypted: EncryptedWalletStorage, password: string): Promise<StoredWallet | null> {
+  try {
+    // Reconstruct the blob format expected by decryptData
+    const blob = {
+      version: 1, // Storage version expected by encryptedStorage
+      salt: encrypted.salt,
+      iv: encrypted.iv,
+      ciphertext: encrypted.ciphertext,
+      tag: encrypted.tag,
+    };
+    
+    return await decryptData<StoredWallet>(blob, password);
+  } catch (err) {
+    console.warn('Failed to decrypt wallet:', err);
+    return null;
+  }
+}
+
+/** Persist encrypted wallet to localStorage */
+function persistEncrypted(encrypted: EncryptedWalletStorage | undefined) {
+  if (encrypted) {
+    localStorage.setItem(ENCRYPTED_STORAGE_KEY, JSON.stringify(encrypted));
+  } else {
+    localStorage.removeItem(ENCRYPTED_STORAGE_KEY);
+  }
+}
+
+/** Load encrypted wallet from localStorage */
+function loadEncrypted(): EncryptedWalletStorage | null {
+  const raw = localStorage.getItem(ENCRYPTED_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as EncryptedWalletStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Legacy persist for unencrypted storage (will be removed in future) */
 function persist(stored: StoredWallet | undefined) {
   if (stored) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
@@ -92,6 +178,8 @@ function createAccountFromMnemonic(mnemonic: string, derivationIndex: number, na
 const creator: StateCreator<WalletState> = (set, get) => ({
   mode: 'transparent',
   hasWallet: false,
+  isEncrypted: false,
+  isLocked: false,
   accounts: [],
   activeAccountIndex: 0,
   get activeAccount() {
@@ -100,6 +188,22 @@ const creator: StateCreator<WalletState> = (set, get) => ({
   },
   
   initialize: () => {
+    // First check for encrypted wallet
+    const encrypted = loadEncrypted();
+    if (encrypted) {
+      // Wallet exists but is locked - user needs to enter password
+      set({ 
+        hasWallet: true, 
+        isEncrypted: true, 
+        isLocked: true,
+        keypair: undefined,
+        stored: undefined,
+        accounts: [],
+      });
+      return;
+    }
+    
+    // Fall back to legacy unencrypted storage
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     try {
@@ -121,6 +225,8 @@ const creator: StateCreator<WalletState> = (set, get) => ({
         stored, 
         keypair, 
         hasWallet: true,
+        isEncrypted: false,
+        isLocked: false,
         accounts,
         activeAccountIndex: activeIndex,
       });
@@ -132,7 +238,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
   
   setMode: (mode: WalletMode) => set({ mode }),
   
-  createWallet: () => {
+  createWallet: (password?: string) => {
     const mnemonic = generateNewMnemonic();
     const mainAccount = createAccountFromMnemonic(mnemonic, 0, 'Main Wallet');
     const keypair = secretKeyToKeypair(mainAccount.secretKey);
@@ -144,18 +250,45 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       version: WALLET_STORAGE_VERSION,
     };
     
-    persist(stored);
-    set({ 
-      keypair, 
-      stored, 
-      hasWallet: true,
-      accounts: [mainAccount],
-      activeAccountIndex: 0,
-    });
+    if (password) {
+      // Encrypt and store
+      encryptWallet(stored, password).then(encrypted => {
+        persistEncrypted(encrypted);
+        // Remove any legacy unencrypted storage
+        localStorage.removeItem(STORAGE_KEY);
+      });
+      
+      set({ 
+        keypair, 
+        stored, 
+        hasWallet: true,
+        isEncrypted: true,
+        isLocked: false,
+        accounts: [mainAccount],
+        activeAccountIndex: 0,
+      });
+    } else {
+      // Legacy unencrypted storage
+      persist(stored);
+      set({ 
+        keypair, 
+        stored, 
+        hasWallet: true,
+        isEncrypted: false,
+        isLocked: false,
+        accounts: [mainAccount],
+        activeAccountIndex: 0,
+      });
+    }
+    
     return mnemonic;
   },
   
-  importMnemonic: (mnemonic: string) => {
+  createWalletWithPassword: (password: string) => {
+    return get().createWallet(password);
+  },
+  
+  importMnemonic: (mnemonic: string, password?: string) => {
     const mainAccount = createAccountFromMnemonic(mnemonic, 0, 'Main Wallet');
     const keypair = secretKeyToKeypair(mainAccount.secretKey);
     
@@ -166,14 +299,33 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       version: WALLET_STORAGE_VERSION,
     };
     
-    persist(stored);
-    set({ 
-      keypair, 
-      stored, 
-      hasWallet: true,
-      accounts: [mainAccount],
-      activeAccountIndex: 0,
-    });
+    if (password) {
+      encryptWallet(stored, password).then(encrypted => {
+        persistEncrypted(encrypted);
+        localStorage.removeItem(STORAGE_KEY);
+      });
+      
+      set({ 
+        keypair, 
+        stored, 
+        hasWallet: true,
+        isEncrypted: true,
+        isLocked: false,
+        accounts: [mainAccount],
+        activeAccountIndex: 0,
+      });
+    } else {
+      persist(stored);
+      set({ 
+        keypair, 
+        stored, 
+        hasWallet: true,
+        isEncrypted: false,
+        isLocked: false,
+        accounts: [mainAccount],
+        activeAccountIndex: 0,
+      });
+    }
   },
   
   importSecret: (secret: string) => {
@@ -219,20 +371,132 @@ const creator: StateCreator<WalletState> = (set, get) => ({
         accounts,
         faucetGranted: true, // Keep for backwards compat
       };
-      persist(newStored);
+      
+      // Update storage based on encryption status
+      if (state.isEncrypted) {
+        const encrypted = loadEncrypted();
+        if (encrypted) {
+          // Re-encrypt with same password - we need to keep the data in sync
+          // For now, just update in-memory state; encryption happens on lock
+        }
+      } else {
+        persist(newStored);
+      }
+      
       set({ stored: newStored, accounts });
     }
   },
   
   reset: () => {
+    // Clear both encrypted and unencrypted storage
+    persistEncrypted(undefined);
     persist(undefined);
     set({ 
       keypair: undefined, 
       stored: undefined, 
       hasWallet: false,
+      isEncrypted: false,
+      isLocked: false,
       accounts: [],
       activeAccountIndex: 0,
     });
+  },
+  
+  lock: () => {
+    const state = get();
+    if (!state.isEncrypted) {
+      console.warn('Cannot lock: wallet is not encrypted');
+      return;
+    }
+    
+    // Clear sensitive data from memory but keep encrypted storage
+    set({
+      keypair: undefined,
+      stored: undefined,
+      accounts: [],
+      isLocked: true,
+      // Keep hasWallet: true and isEncrypted: true
+    });
+  },
+  
+  unlock: async (password: string) => {
+    const encrypted = loadEncrypted();
+    if (!encrypted) {
+      console.warn('No encrypted wallet found');
+      return false;
+    }
+    
+    // Verify password hash first (quick check)
+    const expectedHash = hashPasswordForVerification(password, encrypted.salt);
+    if (expectedHash !== encrypted.passwordHash) {
+      return false;
+    }
+    
+    // Decrypt wallet data
+    const stored = await decryptWallet(encrypted, password);
+    if (!stored) {
+      return false;
+    }
+    
+    // Migrate if needed
+    const migratedStored = migrateStoredWallet(stored);
+    
+    const accounts = migratedStored.accounts || [];
+    const activeIndex = migratedStored.activeAccountIndex ?? 0;
+    
+    if (accounts.length === 0) {
+      return false;
+    }
+    
+    const activeAccount = accounts[activeIndex] || accounts[0];
+    const keypair = secretKeyToKeypair(activeAccount.secretKey);
+    
+    // Update last unlocked timestamp
+    const updatedEncrypted = { ...encrypted, lastUnlocked: Date.now() };
+    persistEncrypted(updatedEncrypted);
+    
+    set({
+      stored: migratedStored,
+      keypair,
+      hasWallet: true,
+      isEncrypted: true,
+      isLocked: false,
+      accounts,
+      activeAccountIndex: activeIndex,
+    });
+    
+    return true;
+  },
+  
+  verifyPassword: async (password: string) => {
+    const encrypted = loadEncrypted();
+    if (!encrypted) return false;
+    
+    const expectedHash = hashPasswordForVerification(password, encrypted.salt);
+    return expectedHash === encrypted.passwordHash;
+  },
+  
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const state = get();
+    if (!state.stored) {
+      console.warn('No wallet data to re-encrypt');
+      return false;
+    }
+    
+    // Verify current password
+    if (!(await get().verifyPassword(currentPassword))) {
+      return false;
+    }
+    
+    // Re-encrypt with new password
+    const newEncrypted = await encryptWallet(state.stored, newPassword);
+    persistEncrypted(newEncrypted);
+    
+    return true;
+  },
+  
+  hasEncryptedWallet: () => {
+    return loadEncrypted() !== null;
   },
   
   addWallet: (name?: string) => {

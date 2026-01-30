@@ -2,8 +2,11 @@
 members = ["programs/noctura-shield"]
 
 [provider]
-cluster = "https://api.testnet.solana.com"
+cluster = "devnet"
 wallet = "/Users/banel/config/solana/id.json"
+
+[programs.devnet]
+noctura_shield = "3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz"
 
 [programs.testnet]
 noctura_shield = "3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz"

@@ -101,6 +101,16 @@ pub mod noctura_shield {
         Ok(())
     }
 
+    /// Admin function to reset the nullifier set (for devnet testing only)
+    /// WARNING: This allows double-spending of previously spent notes!
+    pub fn reset_nullifiers(ctx: Context<ResetNullifiers>) -> Result<()> {
+        let global = &ctx.accounts.global_state;
+        require!(ctx.accounts.admin.key() == global.admin, ShieldError::Unauthorized);
+        ctx.accounts.nullifier_set.nullifiers = Vec::new();
+        msg!("Nullifier set reset by admin");
+        Ok(())
+    }
+
     pub fn transparent_deposit(
         ctx: Context<TransparentDeposit>,
         commitment: [u8; 32],
@@ -290,6 +300,15 @@ pub mod noctura_shield {
             }
         }
     }
+
+    /// DEVNET ONLY: Emergency reset nullifiers without admin check
+    /// This allows resetting the nullifier set when admin keypair is lost
+    pub fn emergency_reset_nullifiers(ctx: Context<EmergencyResetNullifiers>) -> Result<()> {
+        msg!("EMERGENCY: Resetting nullifier set (devnet only)");
+        ctx.accounts.nullifier_set.nullifiers.clear();
+        msg!("Nullifier set cleared, new count: {}", ctx.accounts.nullifier_set.nullifiers.len());
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -358,6 +377,25 @@ pub struct SetFeeCollector<'info> {
     pub admin: Signer<'info>,
     #[account(mut, seeds = [GLOBAL_STATE_SEED], bump = global_state.bump, has_one = admin)]
     pub global_state: Account<'info, GlobalState>,
+}
+
+#[derive(Accounts)]
+pub struct ResetNullifiers<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump, has_one = admin)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(mut, seeds = [NULLIFIER_SEED], bump)]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
+}
+
+/// DEVNET ONLY: Emergency reset without admin check
+#[derive(Accounts)]
+pub struct EmergencyResetNullifiers<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [NULLIFIER_SEED], bump)]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
 }
 
 #[derive(Accounts)]

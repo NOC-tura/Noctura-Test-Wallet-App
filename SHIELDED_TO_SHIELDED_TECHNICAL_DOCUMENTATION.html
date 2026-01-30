@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noctura Wallet: Shielded-to-Shielded Transaction Technical Documentation</title>
+    <style>
+        @media print {
+            body { font-size: 11pt; }
+            h1 { page-break-before: avoid; }
+            h2 { page-break-before: always; }
+            h2:first-of-type { page-break-before: avoid; }
+            pre { page-break-inside: avoid; }
+            table { page-break-inside: avoid; }
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px;
+            color: #333;
+            background: #fff;
+        }
+        
+        h1 {
+            color: #1a1a2e;
+            border-bottom: 3px solid #6c5ce7;
+            padding-bottom: 15px;
+            font-size: 2.2em;
+        }
+        
+        h2 {
+            color: #2d3436;
+            border-bottom: 2px solid #dfe6e9;
+            padding-bottom: 10px;
+            margin-top: 40px;
+            font-size: 1.6em;
+        }
+        
+        h3 {
+            color: #636e72;
+            font-size: 1.3em;
+            margin-top: 25px;
+        }
+        
+        h4 {
+            color: #6c5ce7;
+            font-size: 1.1em;
+        }
+        
+        code {
+            background: #f4f4f8;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.9em;
+        }
+        
+        pre {
+            background: #2d3436;
+            color: #dfe6e9;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 0.95em;
+        }
+        
+        th, td {
+            border: 1px solid #dfe6e9;
+            padding: 12px;
+            text-align: left;
+        }
+        
+        th {
+            background: #6c5ce7;
+            color: white;
+        }
+        
+        tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+        
+        .toc {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin: 30px 0;
+        }
+        
+        .toc h2 {
+            margin-top: 0;
+            border-bottom: none;
+            color: #6c5ce7;
+        }
+        
+        .toc ol {
+            padding-left: 20px;
+        }
+        
+        .toc li {
+            margin: 8px 0;
+        }
+        
+        .toc a {
+            color: #2d3436;
+            text-decoration: none;
+        }
+        
+        .toc a:hover {
+            color: #6c5ce7;
+        }
+        
+        .highlight {
+            background: linear-gradient(120deg, #f6e58d 0%, #f6e58d 100%);
+            background-repeat: no-repeat;
+            background-size: 100% 40%;
+            background-position: 0 90%;
+        }
+        
+        .info-box {
+            background: #e8f4f8;
+            border-left: 4px solid #6c5ce7;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        
+        .diagram {
+            background: #f4f4f8;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre;
+            overflow-x: auto;
+            line-height: 1.4;
+            font-size: 0.85em;
+        }
+        
+        hr {
+            border: none;
+            border-top: 2px solid #dfe6e9;
+            margin: 40px 0;
+        }
+        
+        .header-meta {
+            color: #636e72;
+            font-size: 0.95em;
+            margin-bottom: 30px;
+        }
+        
+        .section-number {
+            color: #6c5ce7;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Noctura Wallet: Shielded-to-Shielded Transaction Technical Documentation</h1>
+    
+    <div class="header-meta">
+        <strong>Document Version:</strong> 1.0<br>
+        <strong>Date:</strong> January 28, 2026<br>
+        <strong>Scope:</strong> Full technical breakdown of shielded-to-shielded (private-to-private) transaction flow in the Noctura Wallet
+    </div>
+
+    <hr>
+
+    <div class="toc">
+        <h2>Table of Contents</h2>
+        <ol>
+            <li><a href="#section1">Executive Summary</a></li>
+            <li><a href="#section2">Cryptographic Primitives</a></li>
+            <li><a href="#section3">Key Architecture</a></li>
+            <li><a href="#section4">Note Structure & Commitment Scheme</a></li>
+            <li><a href="#section5">The UTXO-Like Model</a></li>
+            <li><a href="#section6">Transfer Circuit (ZK-SNARK)</a></li>
+            <li><a href="#section7">Complete Transaction Flow</a></li>
+            <li><a href="#section8">Relayer System</a></li>
+            <li><a href="#section9">Encrypted Note Discovery</a></li>
+            <li><a href="#section10">On-Chain Program Logic</a></li>
+            <li><a href="#section11">Privacy Guarantees</a></li>
+            <li><a href="#section12">Code Reference Map</a></li>
+        </ol>
+    </div>
+
+    <hr>
+
+    <h2 id="section1"><span class="section-number">1.</span> Executive Summary</h2>
+    
+    <p>Shielded-to-shielded transactions in Noctura Wallet enable fully private token transfers where:</p>
+    
+    <ul>
+        <li><strong>Sender identity is hidden</strong>: The on-chain transaction reveals no link to the sender's wallet</li>
+        <li><strong>Recipient identity is hidden</strong>: The recipient's address is never exposed on-chain</li>
+        <li><strong>Amount is hidden</strong>: The transferred value is encrypted and never appears in plaintext</li>
+        <li><strong>Transaction graph is broken</strong>: Observers cannot link inputs to outputs</li>
+    </ul>
+    
+    <p>This is achieved through:</p>
+    <ul>
+        <li><strong>Zero-Knowledge Proofs (Groth16)</strong>: Prove validity without revealing secrets</li>
+        <li><strong>Poseidon Hash Commitments</strong>: Hide note contents cryptographically</li>
+        <li><strong>Nullifier System</strong>: Prevent double-spending without revealing which note was spent</li>
+        <li><strong>ECDH Encryption</strong>: Securely share note secrets with recipients</li>
+        <li><strong>Relayer Infrastructure</strong>: Break transaction origin linkability</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="section2"><span class="section-number">2.</span> Cryptographic Primitives</h2>
+
+    <h3>2.1 Poseidon Hash Function</h3>
+    
+    <p>Noctura uses the Poseidon hash function, which is optimized for ZK-SNARK circuits (arithmetic over the BN254 elliptic curve scalar field).</p>
+    
+    <p><strong>Field Modulus:</strong></p>
+    <pre><code>p = 21888242871839275222246405745257275088548364400416034343698204186575808495617</code></pre>
+    
+    <p><strong>Properties:</strong></p>
+    <ul>
+        <li>Operates natively on field elements (no bit decomposition needed)</li>
+        <li>~8x more efficient in circuits than SHA-256 or Keccak</li>
+        <li>Collision-resistant and preimage-resistant</li>
+    </ul>
+    
+    <p><strong>Usage in Noctura:</strong></p>
+    <pre><code>commitment = Poseidon(secret, amount, tokenMint, blinding)
+nullifier = Poseidon(secret, rho)
+merkleHash = Poseidon(left, right)</code></pre>
+
+    <h3>2.2 Groth16 Zero-Knowledge Proofs</h3>
+    
+    <p><strong>System Parameters:</strong></p>
+    <ul>
+        <li>Curve: BN254 (also known as alt_bn128)</li>
+        <li>Proof Size: 192 bytes (constant regardless of circuit complexity)</li>
+        <li>Verification: ~3ms on modern hardware</li>
+    </ul>
+    
+    <p><strong>Proof Structure:</strong></p>
+    <ul>
+        <li><strong>π_A</strong>: G1 point (64 bytes)</li>
+        <li><strong>π_B</strong>: G2 point (128 bytes)</li>
+        <li><strong>π_C</strong>: G1 point (64 bytes)</li>
+    </ul>
+
+    <h3>2.3 ECDH Key Agreement</h3>
+    
+    <p>For encrypted note sharing:</p>
+    <ul>
+        <li><strong>Curve</strong>: secp256k1</li>
+        <li><strong>Key Derivation</strong>: HKDF-SHA256</li>
+        <li><strong>Encryption</strong>: ChaCha20-Poly1305 authenticated encryption</li>
+    </ul>
+
+    <hr>
+
+    <h2 id="section3"><span class="section-number">3.</span> Key Architecture</h2>
+    
+    <p>Each Noctura user derives a complete key hierarchy from their Solana wallet:</p>
+
+    <h3>3.1 Key Derivation Tree</h3>
+    
+    <div class="diagram">Master Seed (Solana Secret Key [0:32])
+    │
+    ├── Spend Key (sk_spend)
+    │   └── Info: "noctura/spend/v1"
+    │   └── Purpose: Authorize spending of notes
+    │
+    ├── View Key (sk_view)
+    │   └── Info: "noctura/view/v1"
+    │   └── Purpose: Decrypt incoming notes
+    │
+    ├── Nullifier Key (sk_nullifier)
+    │   └── Info: "noctura/nullifier/v1"
+    │   └── Purpose: Compute nullifiers (separate for security)
+    │
+    └── ECDH Keypair
+        └── Info: "noctura/shielded/v1"
+        └── Purpose: Receive encrypted note data
+        └── Public Key → Shielded Address (noctura1...)</div>
+
+    <h3>3.2 Shielded Address Format</h3>
+    
+    <pre><code>Format: noctura1&lt;hex-encoded-compressed-secp256k1-pubkey&gt;
+Example: noctura102f4b3c7d8e9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6
+Length: 8 (prefix) + 66 (33 bytes × 2 hex chars) = 74 characters</code></pre>
+
+    <h3>3.3 Key Derivation Code</h3>
+    
+    <pre><code>export function deriveShieldedKeys(solanaKeypair: Keypair): ShieldedKeyPair {
+  const masterSeed = solanaKeypair.secretKey.slice(0, 32);
+  
+  // Derive keys using HKDF
+  const spendKey = hkdf(sha256, masterSeed, undefined, 'noctura/spend/v1', 32);
+  const viewKey = hkdf(sha256, masterSeed, undefined, 'noctura/view/v1', 32);
+  const nullifierKey = hkdf(sha256, masterSeed, undefined, 'noctura/nullifier/v1', 32);
+  const ecdhSeed = hkdf(sha256, masterSeed, undefined, 'noctura/shielded/v1', 32);
+  
+  const shieldedPublicKey = secp256k1.getPublicKey(ecdhSeed, true); // compressed
+  
+  return {
+    spendKey,
+    viewKey,
+    nullifierKey,
+    shieldedPublicKey,
+    shieldedAddress: 'noctura1' + bytesToHex(shieldedPublicKey),
+    viewKeyPrivate: ecdhSeed,
+  };
+}</code></pre>
+
+    <hr>
+
+    <h2 id="section4"><span class="section-number">4.</span> Note Structure & Commitment Scheme</h2>
+
+    <h3>4.1 Note Definition</h3>
+    
+    <p>A shielded note represents an unspent balance:</p>
+    
+    <pre><code>type Note = {
+  secret: bigint;      // Random 256-bit value (kept private)
+  amount: bigint;      // Token amount in atomic units
+  tokenMint: bigint;   // Token identifier (1n for SOL, hash of mint for NOC)
+  blinding: bigint;    // Random blinding factor
+  rho: bigint;         // Randomness for nullifier derivation
+  commitment: bigint;  // Poseidon(secret, amount, tokenMint, blinding)
+  nullifier: bigint;   // Poseidon(secret, rho)
+};</code></pre>
+
+    <h3>4.2 Commitment Computation</h3>
+    
+    <p>The commitment hides the note contents while allowing verification:</p>
+    
+    <pre><code>commitment = Poseidon(secret, amount, tokenMint, blinding)</code></pre>
+    
+    <div class="info-box">
+        <strong>Security Properties:</strong>
+        <ul>
+            <li><strong>Hiding</strong>: Without <code>secret</code> and <code>blinding</code>, the <code>amount</code> cannot be determined</li>
+            <li><strong>Binding</strong>: Cannot create two different notes with the same commitment</li>
+            <li><strong>Collision Resistant</strong>: Finding two inputs with same output is computationally infeasible</li>
+        </ul>
+    </div>
+
+    <h3>4.3 Nullifier Computation</h3>
+    
+    <p>The nullifier prevents double-spending:</p>
+    
+    <pre><code>nullifier = Poseidon(secret, rho)</code></pre>
+    
+    <div class="info-box">
+        <strong>Key Insight:</strong>
+        <ul>
+            <li>The nullifier is deterministic given the note secrets</li>
+            <li>Once published, the note is marked as spent</li>
+            <li>The nullifier reveals NOTHING about which commitment it corresponds to</li>
+        </ul>
+    </div>
+
+    <h3>4.4 Note Creation Code</h3>
+    
+    <pre><code>export function createNote(params: {
+  secret: bigint;
+  amount: bigint;
+  tokenMint: bigint;
+  blinding: bigint;
+  rho: bigint;
+}): Note {
+  const commitment = poseidonHash([
+    params.secret, 
+    params.amount, 
+    params.tokenMint, 
+    params.blinding
+  ]);
+  const nullifier = poseidonHash([params.secret, params.rho]);
+  return { ...params, commitment, nullifier };
+}</code></pre>
+
+    <hr>
+
+    <h2 id="section5"><span class="section-number">5.</span> The UTXO-Like Model</h2>
+
+    <h3>5.1 State Model</h3>
+    
+    <p>Noctura uses a UTXO-like model (similar to Bitcoin/Zcash) rather than an account model:</p>
+    
+    <div class="diagram">Global State:
+├── Merkle Tree (stores all commitments)
+│   └── Height: 20 levels
+│   └── Capacity: 2^20 = 1,048,576 notes
+│
+└── Nullifier Set (stores spent nullifiers)
+    └── Linear array of 32-byte nullifier hashes</div>
+
+    <h3>5.2 Spending Notes</h3>
+    
+    <p>To spend a note, the user must:</p>
+    <ol>
+        <li><strong>Prove ownership</strong>: Demonstrate knowledge of the note's secret</li>
+        <li><strong>Prove existence</strong>: Show the commitment exists in the Merkle tree</li>
+        <li><strong>Reveal nullifier</strong>: Publish the nullifier (marks note as spent)</li>
+        <li><strong>Create new notes</strong>: Generate new commitments for recipient and change</li>
+    </ol>
+
+    <h3>5.3 Merkle Tree Structure</h3>
+    
+    <div class="diagram">                    Root
+                   /    \
+                  /      \
+               H(0,1)   H(2,3)
+               /   \    /   \
+             H0    H1  H2   H3
+             |     |   |    |
+            C0    C1  C2   C3  ← Leaf commitments</div>
+    
+    <p><strong>Merkle Proof</strong>: To prove C1 is in the tree:</p>
+    <pre><code>path = [H0, H(2,3)]  // sibling nodes
+indices = [1, 0]      // position at each level (left=0, right=1)</code></pre>
+
+    <hr>
+
+    <h2 id="section6"><span class="section-number">6.</span> Transfer Circuit (ZK-SNARK)</h2>
+
+    <h3>6.1 Circuit Purpose</h3>
+    
+    <p>The transfer circuit proves:</p>
+    <ol>
+        <li>The sender owns a valid unspent note</li>
+        <li>The note exists in the Merkle tree</li>
+        <li>The nullifier is correctly computed</li>
+        <li>The amounts balance (input = output1 + output2)</li>
+        <li>New commitments are correctly formed</li>
+    </ol>
+    
+    <p><strong>WITHOUT REVEALING:</strong></p>
+    <ul>
+        <li>Which note is being spent</li>
+        <li>The amounts involved</li>
+        <li>Who the recipient is</li>
+    </ul>
+
+    <h3>6.2 Circuit Inputs</h3>
+    
+    <pre><code>template ShieldedTransfer() {
+    var TREE_HEIGHT = 20;
+    
+    // PRIVATE INPUTS (known only to prover)
+    signal input inSecret;          // Note secret
+    signal input inAmount;          // Note amount
+    signal input tokenMint;         // Token identifier
+    signal input blinding;          // Blinding factor
+    signal input rho;               // Nullifier randomness
+    signal input pathElements[20];  // Merkle proof siblings
+    signal input pathIndices[20];   // Merkle proof positions
+    
+    signal input outSecret1;        // Recipient note secret
+    signal input outAmount1;        // Recipient amount
+    signal input outBlinding1;      // Recipient blinding
+    
+    signal input outSecret2;        // Change note secret
+    signal input outAmount2;        // Change amount
+    signal input outBlinding2;      // Change blinding
+    
+    // PUBLIC INPUTS (visible to verifier)
+    signal input merkleRoot;        // Current tree root
+    signal input nullifier;         // Note being spent
+    
+    // PUBLIC OUTPUTS
+    signal output outCommitment1;   // Recipient commitment
+    signal output outCommitment2;   // Change commitment
+}</code></pre>
+
+    <h3>6.3 Circuit Constraints</h3>
+
+    <h4>Constraint 1: Input Note Exists in Tree</h4>
+    
+    <pre><code>// Compute input note commitment
+component noteHash = Poseidon(4);
+noteHash.inputs[0] <== inSecret;
+noteHash.inputs[1] <== inAmount;
+noteHash.inputs[2] <== tokenMint;
+noteHash.inputs[3] <== blinding;
+
+// Verify Merkle inclusion
+component treeCheck = MerkleTreeInclusionProof(20);
+treeCheck.leaf <== noteHash.out;
+for (var i = 0; i < 20; i++) {
+    treeCheck.pathElements[i] <== pathElements[i];
+    treeCheck.pathIndex[i] <== pathIndices[i];
+}
+treeCheck.root === merkleRoot;  // Must match public root</code></pre>
+
+    <h4>Constraint 2: Nullifier Correctly Derived</h4>
+    
+    <pre><code>component nullifierHash = Poseidon(2);
+nullifierHash.inputs[0] <== inSecret;
+nullifierHash.inputs[1] <== rho;
+nullifier === nullifierHash.out;  // Must match public nullifier</code></pre>
+
+    <h4>Constraint 3: Amounts Balance (No Inflation)</h4>
+    
+    <pre><code>inAmount === outAmount1 + outAmount2;</code></pre>
+
+    <h4>Constraint 4: Output Commitments</h4>
+    
+    <pre><code>// Recipient note commitment
+component outNoteHash1 = Poseidon(4);
+outNoteHash1.inputs[0] <== outSecret1;
+outNoteHash1.inputs[1] <== outAmount1;
+outNoteHash1.inputs[2] <== tokenMint;  // Same token type
+outNoteHash1.inputs[3] <== outBlinding1;
+outCommitment1 <== outNoteHash1.out;
+
+// Change note commitment
+component outNoteHash2 = Poseidon(4);
+outNoteHash2.inputs[0] <== outSecret2;
+outNoteHash2.inputs[1] <== outAmount2;
+outNoteHash2.inputs[2] <== tokenMint;
+outNoteHash2.inputs[3] <== outBlinding2;
+outCommitment2 <== outNoteHash2.out;</code></pre>
+
+    <h3>6.4 Public vs Private Signals</h3>
+    
+    <table>
+        <tr>
+            <th>Signal</th>
+            <th>Visibility</th>
+            <th>Purpose</th>
+        </tr>
+        <tr>
+            <td><code>merkleRoot</code></td>
+            <td>PUBLIC</td>
+            <td>Anchor proof to on-chain state</td>
+        </tr>
+        <tr>
+            <td><code>nullifier</code></td>
+            <td>PUBLIC</td>
+            <td>Prevent double-spend</td>
+        </tr>
+        <tr>
+            <td><code>outCommitment1</code></td>
+            <td>PUBLIC</td>
+            <td>Add to tree (recipient)</td>
+        </tr>
+        <tr>
+            <td><code>outCommitment2</code></td>
+            <td>PUBLIC</td>
+            <td>Add to tree (change)</td>
+        </tr>
+        <tr>
+            <td><code>inSecret</code>, <code>inAmount</code>, etc.</td>
+            <td>PRIVATE</td>
+            <td>Note ownership proof</td>
+        </tr>
+        <tr>
+            <td><code>pathElements</code>, <code>pathIndices</code></td>
+            <td>PRIVATE</td>
+            <td>Which leaf (anonymity set)</td>
+        </tr>
+        <tr>
+            <td><code>outSecret1/2</code>, <code>outAmount1/2</code>, etc.</td>
+            <td>PRIVATE</td>
+            <td>New note details</td>
+        </tr>
+    </table>
+
+    <hr>
+
+    <h2 id="section7"><span class="section-number">7.</span> Complete Transaction Flow</h2>
+
+    <h3>7.1 High-Level Flow Diagram</h3>
+    
+    <div class="diagram">┌─────────────────────────────────────────────────────────────────────────┐
+│                    SHIELDED-TO-SHIELDED TRANSFER                       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+SENDER'S DEVICE                          RELAYER                    SOLANA CHAIN
+     │                                      │                            │
+     │ 1. Select input note                 │                            │
+     │ 2. Decode recipient pubkey           │                            │
+     │ 3. Create recipient note             │                            │
+     │ 4. Create change note                │                            │
+     │ 5. Build Merkle proof                │                            │
+     │ 6. Generate ZK proof                 │                            │
+     │ 7. Encrypt note for recipient        │                            │
+     │                                      │                            │
+     │───── Send proof + commitments ──────>│                            │
+     │                                      │                            │
+     │                                      │ 8. Validate proof format   │
+     │                                      │ 9. Sign transaction        │
+     │                                      │                            │
+     │                                      │───── Submit tx ───────────>│
+     │                                      │                            │
+     │                                      │                            │ 10. Verify ZK proof
+     │                                      │                            │ 11. Check nullifier
+     │                                      │                            │ 12. Mark nullifier spent
+     │                                      │                            │ 13. Append commitments
+     │                                      │                            │
+     │                                      │<──── Confirmation ─────────│
+     │                                      │                            │
+     │                                      │ 14. Send encrypted memo    │
+     │                                      │                            │
+     │<───────── Success + signature ───────│                            │
+     │                                      │                            │
+     │ 15. Mark input note spent            │                            │
+     │ 16. Save change note locally         │                            │
+     │                                      │                            │
+     ▼                                      ▼                            ▼
+
+RECIPIENT'S DEVICE
+     │
+     │ 17. Scanner detects memo transaction
+     │ 18. Attempt decryption with view key
+     │ 19. If successful, import note
+     │
+     ▼</div>
+
+    <h3>7.2 Detailed Step-by-Step</h3>
+
+    <h4>Step 1: Validate Recipient Address</h4>
+    <pre><code>const isShieldedRecipient = trimmedRecipient.startsWith('noctura1');
+if (isShieldedRecipient) {
+  const recipientPublicKey = decodeShieldedAddress(trimmedRecipient);
+  // Verify it's a valid compressed secp256k1 pubkey
+  if (recipientPublicKey.length !== 33 || 
+      (recipientPublicKey[0] !== 0x02 && recipientPublicKey[0] !== 0x03)) {
+    throw new Error('Invalid recipient public key');
+  }
+}</code></pre>
+
+    <h4>Step 2: Select Input Note</h4>
+    <pre><code>// Filter for unspent notes of correct token type
+const availableNotes = shieldedNotes.filter((note) => {
+  if (note.spent || note.owner !== walletAddress) return false;
+  if (tokenType === 'SOL') return note.tokenType === 'SOL';
+  return note.tokenType === 'NOC' || !note.tokenType;
+});
+
+// Find note with sufficient balance
+const sortedNotes = [...availableNotes].sort((a, b) => 
+  Number(BigInt(b.amount) - BigInt(a.amount))
+);
+const spendNote = sortedNotes.find(n => BigInt(n.amount) >= atoms);</code></pre>
+
+    <h4>Step 3-4: Create Output Notes</h4>
+    <pre><code>// Recipient note (with transfer amount)
+const recipientNote = createNoteFromSecrets(atoms, tokenType);
+
+// Change note (remainder)
+const changeAmount = noteAmount - atoms;
+const changeNote = createNoteFromSecrets(changeAmount, tokenType);</code></pre>
+
+    <h4>Step 5-6: Generate ZK Proof</h4>
+    <pre><code>const transferWitness = serializeTransferWitness({
+  inputNote, merkleProof, outputNote1: recipientNote, outputNote2: changeNote
+});
+const proof = await proveCircuit('transfer', transferWitness);</code></pre>
+
+    <h4>Step 7: Encrypt Note for Recipient</h4>
+    <pre><code>const notePayload: NotePayload = {
+  amount: recipientNote.amount.toString(),
+  secret: recipientNote.secret.toString(),
+  blinding: recipientNote.blinding.toString(),
+  rho: recipientNote.rho.toString(),
+  commitment: recipientNote.commitment.toString(),
+  tokenType,
+};
+const encryptedNote = encryptNoteToRecipient(recipientPublicKey, notePayload);</code></pre>
+
+    <h4>Step 8: Submit via Relayer</h4>
+    <pre><code>const result = await relayTransfer({
+  proof,
+  nullifier: spendNote.nullifier,
+  outputCommitment1: recipientNote.commitment.toString(),
+  outputCommitment2: changeNote.commitment.toString(),
+  encryptedNote: serializeEncryptedNote(encryptedNote),
+});</code></pre>
+
+    <hr>
+
+    <h2 id="section8"><span class="section-number">8.</span> Relayer System</h2>
+
+    <h3>8.1 Why a Relayer?</h3>
+    
+    <p>Without a relayer, the sender's Solana address would appear as the transaction signer, breaking sender privacy. The relayer:</p>
+    
+    <ol>
+        <li><strong>Hides sender identity</strong>: Signs transactions on behalf of users</li>
+        <li><strong>Pays gas fees</strong>: Users don't need SOL in transparent wallet</li>
+        <li><strong>Cannot steal funds</strong>: Has no access to note secrets</li>
+    </ol>
+
+    <h3>8.2 Relayer API</h3>
+    
+    <pre><code>// POST /relay/transfer
+{
+  proof: {
+    proofBytes: string,      // Base64 encoded Groth16 proof
+    publicInputs: string[],  // Base64 encoded field elements
+  },
+  nullifier: string,         // Nullifier being consumed
+  outputCommitment1: string, // Recipient commitment
+  outputCommitment2: string, // Change commitment
+  encryptedNote?: string,    // Optional encrypted note for recipient
+}
+
+// Response
+{
+  signature: string,         // Solana transaction signature
+}</code></pre>
+
+    <h3>8.3 Relayer Transaction Building</h3>
+    
+    <pre><code>// Build shielded transfer instruction
+const transferIx = await program.methods
+  .shieldedTransfer(
+    [nullifierBytes],                    // Nullifiers being spent
+    [commitment1Bytes, commitment2Bytes], // New commitments
+    Buffer.from(proofBytes),              // ZK proof
+    publicInputs                          // Public circuit inputs
+  )
+  .accounts({
+    merkleTree: pdas.merkleTree,
+    nullifierSet: pdas.nullifierSet,
+    transferVerifier: pdas.transferVerifier,
+  })
+  .instruction();
+
+// Add compute budget (ZK verification is expensive)
+const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+  units: 400_000,  // Default is 200K, ZK proofs need more
+});
+
+// Sign with relayer key
+const tx = new Transaction().add(computeBudgetIx).add(transferIx);
+tx.sign(relayerKeypair);</code></pre>
+
+    <hr>
+
+    <h2 id="section9"><span class="section-number">9.</span> Encrypted Note Discovery</h2>
+
+    <h3>9.1 ECDH Encryption Scheme</h3>
+    
+    <pre><code>export function encryptNoteToRecipient(
+  recipientPubkey: Uint8Array,
+  notePayload: NotePayload
+): EncryptedNotePayload {
+  // Generate ephemeral keypair
+  const ephemeralPrivate = randomBytes(32);
+  const ephemeralPublic = secp256k1.getPublicKey(ephemeralPrivate, true);
+  
+  // ECDH: shared = ephemeralPrivate * recipientPubkey
+  const sharedPoint = secp256k1.getSharedSecret(ephemeralPrivate, recipientPubkey);
+  
+  // KDF: derive encryption key
+  const encKey = hkdf(sha256, sharedPoint, undefined, 'noctura/encrypt/v1', 32);
+  
+  // Serialize payload (compact binary format)
+  const plaintext = serializeNotePayloadCompact(notePayload);
+  
+  // Encrypt with ChaCha20-Poly1305
+  const nonce = randomBytes(12);
+  const cipher = chacha20poly1305(encKey, nonce);
+  const ciphertext = cipher.encrypt(plaintext);
+  
+  return {
+    ephemeralPubkey: bytesToHex(ephemeralPublic),
+    nonce: bytesToHex(nonce),
+    ciphertext: bytesToHex(ciphertext),
+  };
+}</code></pre>
+
+    <h3>9.2 Note Decryption</h3>
+    
+    <pre><code>export function decryptNoteWithViewKey(
+  encryptedPayload: EncryptedNotePayload,
+  viewKeyPrivate: Uint8Array
+): NotePayload | null {
+  try {
+    const ephemeralPub = hexToBytes(encryptedPayload.ephemeralPubkey);
+    
+    // ECDH: shared = viewKeyPrivate * ephemeralPubkey
+    const sharedPoint = secp256k1.getSharedSecret(viewKeyPrivate, ephemeralPub);
+    
+    // KDF: derive decryption key
+    const decKey = hkdf(sha256, sharedPoint, undefined, 'noctura/encrypt/v1', 32);
+    
+    // Decrypt
+    const nonce = hexToBytes(encryptedPayload.nonce);
+    const ciphertext = hexToBytes(encryptedPayload.ciphertext);
+    const cipher = chacha20poly1305(decKey, nonce);
+    const plaintext = cipher.decrypt(ciphertext);
+    
+    return deserializeNotePayloadCompact(plaintext);
+  } catch {
+    return null;  // Decryption failed = not for this recipient
+  }
+}</code></pre>
+
+    <h3>9.3 Background Scanner</h3>
+    
+    <pre><code>export async function scanForIncomingNotes(keypair: Keypair): Promise&lt;ScanResult&gt; {
+  const connection = new Connection(SOLANA_RPC, 'confirmed');
+  const ecdhPrivateKey = getECDHPrivateKey(keypair);
+  
+  // Scan relayer transactions for memos
+  const signatures = await connection.getSignaturesForAddress(RELAYER_FEE_PAYER);
+  
+  for (const sigInfo of signatures) {
+    const tx = await connection.getTransaction(sigInfo.signature);
+    const encryptedNotes = extractEncryptedNotesFromTx(tx);
+    
+    for (const { encryptedData } of encryptedNotes) {
+      const encrypted = deserializeEncryptedNote(encryptedData);
+      const decrypted = decryptNoteWithViewKey(encrypted, ecdhPrivateKey);
+      
+      if (decrypted) {
+        // This note is for us - import it!
+        onNewNoteCallback({ notePayload: decrypted, signature: sigInfo.signature });
+      }
+    }
+  }
+}</code></pre>
+
+    <hr>
+
+    <h2 id="section10"><span class="section-number">10.</span> On-Chain Program Logic</h2>
+
+    <h3>10.1 Program ID</h3>
+    <pre><code>3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz</code></pre>
+
+    <h3>10.2 Shielded Transfer Instruction</h3>
+    
+    <pre><code>pub fn shielded_transfer(
+    ctx: Context&lt;ShieldedTransfer&gt;,
+    input_nullifiers: Vec&lt;[u8; 32]&gt;,
+    output_commitments: Vec&lt;[u8; 32]&gt;,
+    proof: Vec&lt;u8&gt;,
+    public_inputs: Vec&lt;[u8; 32]&gt;,
+) -> Result&lt;()&gt; {
+    // 1. Validate inputs
+    require!(!input_nullifiers.is_empty(), ShieldError::InvalidAmount);
+    require!(!output_commitments.is_empty(), ShieldError::InvalidAmount);
+    
+    // 2. Verify the ZK proof
+    verify_groth16(&ctx.accounts.transfer_verifier, &proof, &public_inputs)?;
+    
+    // 3. Mark nullifiers as spent (prevents double-spend)
+    for nullifier in input_nullifiers {
+        track_nullifier(&mut ctx.accounts.nullifier_set, nullifier)?;
+        emit!(NullifierConsumed { nullifier });
+    }
+    
+    // 4. Append new commitments to Merkle tree
+    for commitment in output_commitments {
+        let _root = ctx.accounts.merkle_tree.append_leaf(commitment)?;
+    }
+    
+    Ok(())
+}</code></pre>
+
+    <hr>
+
+    <h2 id="section11"><span class="section-number">11.</span> Privacy Guarantees</h2>
+
+    <h3>11.1 What Observers See</h3>
+    
+    <p>For a shielded-to-shielded transfer, on-chain observers see:</p>
+    
+    <table>
+        <tr>
+            <th>Data</th>
+            <th>Visible?</th>
+            <th>Details</th>
+        </tr>
+        <tr>
+            <td>Sender address</td>
+            <td>❌</td>
+            <td>Relayer signs, not sender</td>
+        </tr>
+        <tr>
+            <td>Recipient address</td>
+            <td>❌</td>
+            <td>Only commitment is stored</td>
+        </tr>
+        <tr>
+            <td>Transfer amount</td>
+            <td>❌</td>
+            <td>Hidden in commitment</td>
+        </tr>
+        <tr>
+            <td>Which note spent</td>
+            <td>❌</td>
+            <td>Nullifier unlinkable to commitment</td>
+        </tr>
+        <tr>
+            <td>Token type</td>
+            <td>❌</td>
+            <td>Encoded in commitment</td>
+        </tr>
+        <tr>
+            <td>New commitments</td>
+            <td>✅</td>
+            <td>But reveals nothing</td>
+        </tr>
+        <tr>
+            <td>Nullifier</td>
+            <td>✅</td>
+            <td>Cannot link to source</td>
+        </tr>
+        <tr>
+            <td>Encrypted memo</td>
+            <td>✅</td>
+            <td>But only recipient can decrypt</td>
+        </tr>
+    </table>
+
+    <h3>11.2 Anonymity Set</h3>
+    
+    <p>The anonymity set is the entire Merkle tree:</p>
+    <ul>
+        <li>All notes that have ever been deposited</li>
+        <li>Up to 2^20 = 1,048,576 possible notes</li>
+        <li>The proof doesn't reveal which leaf was spent</li>
+    </ul>
+
+    <h3>11.3 Attack Resistance</h3>
+    
+    <table>
+        <tr>
+            <th>Attack</th>
+            <th>Mitigation</th>
+        </tr>
+        <tr>
+            <td>Transaction graph analysis</td>
+            <td>Nullifier unlinkability</td>
+        </tr>
+        <tr>
+            <td>Amount correlation</td>
+            <td>Hidden in commitments</td>
+        </tr>
+        <tr>
+            <td>Timing analysis</td>
+            <td>Relayer batching (optional)</td>
+        </tr>
+        <tr>
+            <td>Sender identification</td>
+            <td>Relayer signs transactions</td>
+        </tr>
+        <tr>
+            <td>Recipient identification</td>
+            <td>ECDH encryption</td>
+        </tr>
+        <tr>
+            <td>Double-spending</td>
+            <td>Nullifier tracking</td>
+        </tr>
+        <tr>
+            <td>Inflation</td>
+            <td>Circuit amount constraint</td>
+        </tr>
+    </table>
+
+    <hr>
+
+    <h2 id="section12"><span class="section-number">12.</span> Code Reference Map</h2>
+
+    <h3>12.1 Key Files</h3>
+    
+    <table>
+        <tr>
+            <th>Component</th>
+            <th>File Path</th>
+        </tr>
+        <tr>
+            <td>Key Derivation</td>
+            <td><code>app/src/lib/shieldedKeys.ts</code></td>
+        </tr>
+        <tr>
+            <td>Note Creation</td>
+            <td><code>app/src/lib/shield.ts</code></td>
+        </tr>
+        <tr>
+            <td>ZK Circuit</td>
+            <td><code>zk/circuits/transfer.circom</code></td>
+        </tr>
+        <tr>
+            <td>Merkle Circuit</td>
+            <td><code>zk/circuits/merkle.circom</code></td>
+        </tr>
+        <tr>
+            <td>Transfer Flow</td>
+            <td><code>app/src/App.tsx</code></td>
+        </tr>
+        <tr>
+            <td>Relayer Client</td>
+            <td><code>app/src/lib/prover.ts</code></td>
+        </tr>
+        <tr>
+            <td>On-Chain Program</td>
+            <td><code>programs/noctura-shield/src/lib.rs</code></td>
+        </tr>
+        <tr>
+            <td>ECDH Encryption</td>
+            <td><code>app/src/lib/ecdhEncryption.ts</code></td>
+        </tr>
+        <tr>
+            <td>Wallet Scanner</td>
+            <td><code>app/src/lib/walletScanner.ts</code></td>
+        </tr>
+    </table>
+
+    <h3>12.2 Function Reference</h3>
+    
+    <table>
+        <tr>
+            <th>Function</th>
+            <th>Purpose</th>
+            <th>Location</th>
+        </tr>
+        <tr>
+            <td><code>deriveShieldedKeys()</code></td>
+            <td>Derive key hierarchy</td>
+            <td>shieldedKeys.ts</td>
+        </tr>
+        <tr>
+            <td><code>createNote()</code></td>
+            <td>Create note with commitment</td>
+            <td>witness/note.ts</td>
+        </tr>
+        <tr>
+            <td><code>createNoteFromSecrets()</code></td>
+            <td>Create note for token type</td>
+            <td>shield.ts</td>
+        </tr>
+        <tr>
+            <td><code>startShieldedTransfer()</code></td>
+            <td>Initiate transfer</td>
+            <td>App.tsx</td>
+        </tr>
+        <tr>
+            <td><code>proveCircuit('transfer', ...)</code></td>
+            <td>Generate ZK proof</td>
+            <td>prover.ts</td>
+        </tr>
+        <tr>
+            <td><code>encryptNoteToRecipient()</code></td>
+            <td>ECDH encrypt note</td>
+            <td>ecdhEncryption.ts</td>
+        </tr>
+        <tr>
+            <td><code>relayTransfer()</code></td>
+            <td>Submit via relayer</td>
+            <td>prover.ts</td>
+        </tr>
+        <tr>
+            <td><code>shielded_transfer()</code></td>
+            <td>On-chain instruction</td>
+            <td>lib.rs</td>
+        </tr>
+        <tr>
+            <td><code>scanForIncomingNotes()</code></td>
+            <td>Background scanner</td>
+            <td>walletScanner.ts</td>
+        </tr>
+        <tr>
+            <td><code>decryptNoteWithViewKey()</code></td>
+            <td>Decrypt incoming note</td>
+            <td>ecdhEncryption.ts</td>
+        </tr>
+    </table>
+
+    <hr>
+
+    <h2>Summary</h2>
+    
+    <p>Shielded-to-shielded transactions in Noctura achieve full privacy through:</p>
+    
+    <ol>
+        <li><strong>Commitment Scheme</strong>: Poseidon hashes hide note contents</li>
+        <li><strong>Nullifier System</strong>: Prevents double-spend without revealing note identity</li>
+        <li><strong>Zero-Knowledge Proofs</strong>: Prove validity without exposing secrets</li>
+        <li><strong>Relayer Architecture</strong>: Breaks sender-transaction linkability</li>
+        <li><strong>ECDH Encryption</strong>: Secure note sharing with recipients</li>
+        <li><strong>Background Discovery</strong>: Automatic incoming note detection</li>
+    </ol>
+    
+    <p>The system provides strong privacy guarantees while maintaining full verifiability and preventing inflation attacks through cryptographic constraints enforced in the ZK circuit.</p>
+
+    <hr>
+    
+    <p style="text-align: center; color: #636e72; font-size: 0.9em;">
+        <em>Document generated for Noctura Wallet v1.0</em><br>
+        <em>Last updated: January 28, 2026</em>
+    </p>
+
+    <script>
+        // Print instructions
+        console.log('To save as PDF: Press Ctrl+P (or Cmd+P on Mac) and select "Save as PDF"');
+    </script>
+</body>
+</html>
