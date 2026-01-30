@@ -16,3 +16,5 @@ services:
         value: 8787
       - key: SOLANA_RPC_URL
         value: https://api.devnet.solana.com
+      - key: HELIUS_API_KEY
+        value: 5d57d00d-0ea2-4fe1-8d81-bc8b4aed3f18
