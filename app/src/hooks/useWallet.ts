@@ -36,7 +36,7 @@ type WalletState = {
   createWalletWithPassword: (password: string) => string;
   importMnemonic: (mnemonic: string, password?: string) => void;
   importSecret: (secret: string) => void;
-  markAirdrop: () => void;
+  markAirdrop: () => Promise<void>;
   reset: () => void;
   /** Lock the wallet (clear memory, keep encrypted storage) */
   lock: () => void;
@@ -360,7 +360,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
     });
   },
   
-  markAirdrop: () => {
+  markAirdrop: async () => {
     const state = get();
     const stored = state.stored;
     const accounts = [...state.accounts];
@@ -377,13 +377,10 @@ const creator: StateCreator<WalletState> = (set, get) => ({
         faucetGranted: true, // Keep for backwards compat
       };
       
-      // Update storage based on encryption status
-      if (state.isEncrypted) {
-        const encrypted = loadEncrypted();
-        if (encrypted) {
-          // Re-encrypt with same password - we need to keep the data in sync
-          // For now, just update in-memory state; encryption happens on lock
-        }
+      // Persist to correct storage based on encryption state
+      if (state.isEncrypted && state.currentPassword) {
+        const encrypted = await encryptWallet(newStored, state.currentPassword);
+        persistEncrypted(encrypted);
       } else {
         persist(newStored);
       }
