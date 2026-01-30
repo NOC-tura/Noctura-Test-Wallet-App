@@ -20,6 +20,8 @@ type WalletState = {
   isEncrypted: boolean;
   /** Whether wallet is currently locked (encrypted but not unlocked) */
   isLocked: boolean;
+  /** Current password (kept in memory while unlocked for re-encryption on changes) */
+  currentPassword?: string;
   /** All wallet accounts */
   accounts: WalletAccount[];
   /** Index of the currently active account */
@@ -47,13 +49,13 @@ type WalletState = {
   /** Check if encrypted wallet exists in storage */
   hasEncryptedWallet: () => boolean;
   /** Add a new wallet account (derived from same mnemonic) */
-  addWallet: (name?: string) => WalletAccount | null;
+  addWallet: (name?: string) => Promise<WalletAccount | null>;
   /** Switch to a different wallet account */
   switchWallet: (index: number) => void;
   /** Rename a wallet account */
-  renameWallet: (index: number, newName: string) => void;
+  renameWallet: (index: number, newName: string) => Promise<void>;
   /** Remove a wallet account (cannot remove the main wallet at index 0) */
-  removeWallet: (index: number) => boolean;
+  removeWallet: (index: number) => Promise<boolean>;
   /** Get the total number of wallet accounts */
   getWalletCount: () => number;
 };
@@ -180,6 +182,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
   hasWallet: false,
   isEncrypted: false,
   isLocked: false,
+  currentPassword: undefined,
   accounts: [],
   activeAccountIndex: 0,
   get activeAccount() {
@@ -264,6 +267,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
         hasWallet: true,
         isEncrypted: true,
         isLocked: false,
+        currentPassword: password, // Store password for re-encryption on changes
         accounts: [mainAccount],
         activeAccountIndex: 0,
       });
@@ -311,6 +315,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
         hasWallet: true,
         isEncrypted: true,
         isLocked: false,
+        currentPassword: password, // Store password for re-encryption on changes
         accounts: [mainAccount],
         activeAccountIndex: 0,
       });
@@ -414,6 +419,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       keypair: undefined,
       stored: undefined,
       accounts: [],
+      currentPassword: undefined, // Clear password from memory
       isLocked: true,
       // Keep hasWallet: true and isEncrypted: true
     });
@@ -461,6 +467,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       hasWallet: true,
       isEncrypted: true,
       isLocked: false,
+      currentPassword: password, // Store password for re-encryption on changes
       accounts,
       activeAccountIndex: activeIndex,
     });
@@ -499,7 +506,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
     return loadEncrypted() !== null;
   },
   
-  addWallet: (name?: string) => {
+  addWallet: async (name?: string) => {
     const state = get();
     const stored = state.stored;
     
@@ -532,7 +539,14 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       accounts: newAccounts,
     };
     
-    persist(newStored);
+    // Persist to correct storage based on encryption state
+    if (state.isEncrypted && state.currentPassword) {
+      const encrypted = await encryptWallet(newStored, state.currentPassword);
+      persistEncrypted(encrypted);
+    } else {
+      persist(newStored);
+    }
+    
     set({ stored: newStored, accounts: newAccounts });
     
     return newAccount;
@@ -554,7 +568,15 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       activeAccountIndex: index,
     };
     
-    persist(newStored);
+    // Persist to correct storage based on encryption state
+    if (state.isEncrypted && state.currentPassword) {
+      encryptWallet(newStored, state.currentPassword).then(encrypted => {
+        persistEncrypted(encrypted);
+      });
+    } else {
+      persist(newStored);
+    }
+    
     set({ 
       keypair, 
       stored: newStored, 
@@ -562,7 +584,7 @@ const creator: StateCreator<WalletState> = (set, get) => ({
     });
   },
   
-  renameWallet: (index: number, newName: string) => {
+  renameWallet: async (index: number, newName: string) => {
     const state = get();
     
     if (index < 0 || index >= state.accounts.length) {
@@ -578,11 +600,18 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       accounts,
     };
     
-    persist(newStored);
+    // Persist to correct storage based on encryption state
+    if (state.isEncrypted && state.currentPassword) {
+      const encrypted = await encryptWallet(newStored, state.currentPassword);
+      persistEncrypted(encrypted);
+    } else {
+      persist(newStored);
+    }
+    
     set({ stored: newStored, accounts });
   },
   
-  removeWallet: (index: number) => {
+  removeWallet: async (index: number) => {
     const state = get();
     
     // Cannot remove main wallet
@@ -615,7 +644,14 @@ const creator: StateCreator<WalletState> = (set, get) => ({
       activeAccountIndex: newActiveIndex,
     };
     
-    persist(newStored);
+    // Persist to correct storage based on encryption state
+    if (state.isEncrypted && state.currentPassword) {
+      const encrypted = await encryptWallet(newStored, state.currentPassword);
+      persistEncrypted(encrypted);
+    } else {
+      persist(newStored);
+    }
+    
     set({ 
       stored: newStored, 
       accounts, 
