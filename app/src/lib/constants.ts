@@ -26,14 +26,15 @@ export const SHIELD_PROGRAM_ID = readEnv('VITE_SHIELD_PROGRAM', '3KN2qrmEtPyk9WG
 // Helius API key for faster RPC
 const HELIUS_API_KEY = readEnv('VITE_HELIUS_API_KEY', '');
 
-// RPC URL with fallback - prefer Helius if API key is available
+// RPC URL - ALWAYS prefer Helius if API key is available (overrides VITE_SOLANA_RPC_URL)
 const buildTimeRpc = (globalThis as any).__HELIUS_URL__ as string | undefined;
-const defaultRpc = HELIUS_API_KEY 
+const heliusRpc = HELIUS_API_KEY 
   ? `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
-  : 'https://api.devnet.solana.com';
+  : null;
+const envRpc = readEnv('VITE_SOLANA_RPC_URL', '');
 export const HeliusRpcUrl = buildTimeRpc && buildTimeRpc.startsWith('http') 
   ? buildTimeRpc 
-  : readEnv('VITE_SOLANA_RPC_URL', defaultRpc);
+  : heliusRpc || envRpc || 'https://api.devnet.solana.com';
 
 const buildTimeProver = (globalThis as any).__PROVER_URL__ as string | undefined;
 export const ProverServiceUrl = buildTimeProver && buildTimeProver.startsWith('http')
@@ -54,7 +55,7 @@ export const RELAYER_ENDPOINTS = (() => {
 })();
 
 // Solana RPC endpoint - prefer Helius if API key is available
-export const SOLANA_RPC = readEnv('VITE_SOLANA_RPC', defaultRpc);
+export const SOLANA_RPC = heliusRpc || envRpc || 'https://api.devnet.solana.com';
 
 // Health check interval and timeout
 export const RELAYER_HEALTH_CHECK_INTERVAL_MS = 30_000; // 30 seconds
