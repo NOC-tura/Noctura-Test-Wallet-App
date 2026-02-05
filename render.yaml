@@ -1,12 +1,11 @@
 services:
   - type: web
     name: noctura-relayer
-    runtime: node
+    runtime: docker
     region: oregon
-    plan: free
+    plan: starter
     rootDir: zk/prover-service
-    buildCommand: npm install --include=dev && npm run build && bash scripts/download-artifacts.sh
-    startCommand: node dist/index.js
+    dockerfilePath: ./Dockerfile
     numInstances: 1
     healthCheckPath: /health
     envVars:
@@ -18,3 +17,5 @@ services:
         value: https://api.devnet.solana.com
       - key: HELIUS_API_KEY
         value: 5d57d00d-0ea2-4fe1-8d81-bc8b4aed3f18
+      - key: USE_RAPIDSNARK
+        value: "true"
