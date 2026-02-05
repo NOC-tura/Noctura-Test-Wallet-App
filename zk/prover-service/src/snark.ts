@@ -6,6 +6,9 @@ import { tmpdir } from 'os';
 import * as snarkjs from 'snarkjs';
 import { CIRCUIT_BUILD_DIR, KEYS_DIR } from './config.js';
 
+// snarkjs wtns module exists at runtime but isn't typed
+const snarkjsWtns = (snarkjs as unknown as { wtns: { calculate: (input: unknown, wasm: string, wtns: string) => Promise<void> } }).wtns;
+
 const cache = new Map<string, { wasm: string; zkey: string }>();
 
 // Check if RapidSNARK is available
@@ -53,9 +56,7 @@ async function generateProofRapidsnark(circuit: string, input: Record<string, un
   try {
     // Step 1: Calculate witness using snarkjs (still needed, but fast)
     const witnessStart = performance.now();
-    const witnessCalculator = await snarkjs.wtns.newWtns(wasmPath, witnessPath, input);
-    // Actually we need to use the calculate function properly
-    await snarkjs.wtns.calculate(input, wasmPath, witnessPath);
+    await snarkjsWtns.calculate(input, wasmPath, witnessPath);
     const witnessMs = performance.now() - witnessStart;
     console.log(`[prover:${circuit}] Witness calculated in ${Math.round(witnessMs)}ms`);
     
