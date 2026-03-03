@@ -669,9 +669,24 @@ pub mod noctura_shield {
             );
             anchor_spl::token::transfer(transfer_ctx, input_amount)?;
 
-            // Transfer SOL from sol_vault to user (direct lamport manipulation)
-            **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= output_amount;
-            **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += output_amount;
+            // Transfer SOL from sol_vault to user using invoke_signed
+            let sol_vault_bump = ctx.bumps.sol_vault;
+            let seeds = &[SOL_VAULT_SEED, &[sol_vault_bump]];
+            let signer = &[&seeds[..]];
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.sol_vault.key(),
+                    &ctx.accounts.user.key(),
+                    output_amount,
+                ),
+                &[
+                    ctx.accounts.sol_vault.to_account_info(),
+                    ctx.accounts.user.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                signer,
+            )?;
 
             // Update reserves
             pool.noc_reserve = pool.noc_reserve.checked_add(input_amount)
