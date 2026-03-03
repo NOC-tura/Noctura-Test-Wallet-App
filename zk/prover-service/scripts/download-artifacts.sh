@@ -21,6 +21,7 @@ mkdir -p ../build/transfer
 mkdir -p ../build/withdraw
 mkdir -p ../build/transfer-multi
 mkdir -p ../build/partial_withdraw
+mkdir -p ../build/swap
 
 # Copy keys
 cp /tmp/zk-artifacts/*.zkey ../keys/
@@ -33,6 +34,7 @@ cp -r /tmp/zk-artifacts/transfer_js ../build/transfer/
 cp -r /tmp/zk-artifacts/withdraw_js ../build/withdraw/
 cp -r /tmp/zk-artifacts/transfer-multi_js ../build/transfer-multi/
 cp -r /tmp/zk-artifacts/partial_withdraw_js ../build/partial_withdraw/
+cp -r /tmp/zk-artifacts/swap_js ../build/swap/ 2>/dev/null || echo "swap_js not in artifacts yet"
 
 # Copy IDL for relayer
 mkdir -p ../../target/idl
