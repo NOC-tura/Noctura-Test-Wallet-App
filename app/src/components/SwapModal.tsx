@@ -353,8 +353,8 @@ export function SwapModal({
               </span>
             </div>
             <div className="flex justify-between text-neutral-400">
-              <span>Network Fee</span>
-              <span className="text-white">~{quote.fee} SOL</span>
+              <span>Swap Fee (0.12%)</span>
+              <span className="text-white">~{quote.fee.toFixed(9)} SOL</span>
             </div>
             {isShielded && (
               <div className="flex justify-between text-neutral-400">
