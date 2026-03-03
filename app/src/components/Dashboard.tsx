@@ -327,7 +327,7 @@ export function Dashboard({
               {/* Left: Logo + Title - smaller on mobile */}
               <div className="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-start">
                 <h1 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2 md:gap-4">
-                  <img src="/NOC1.png" alt="Noctura" className="h-16 md:h-36 w-auto" />
+                  <img src="/NOCNOC.png" alt="Noctura" className="h-16 md:h-36 w-auto" />
                   <span className="text-2xl md:text-4xl" style={{ marginTop: '-5px' }}>Wallet</span>
                 </h1>
                 {/* Mobile HOW TO USE button */}
@@ -575,7 +575,7 @@ export function Dashboard({
                       <div className="asset-amount" style={{ color: themeColor }}>{solBalance.toFixed(2)}</div>
                     </div>
                     <div className="asset-item">
-                      <img src="/logo3.jpg" alt="NOC" className="asset-logo" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                      <img src="/LOGO.png" alt="NOC" className="asset-logo" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
                       <div className="asset-info">
                         <div className="asset-name">Noctura</div>
                         <div className="asset-symbol">NOC</div>
@@ -606,7 +606,7 @@ export function Dashboard({
                       {shieldedNocBalance > 0 && (
                         <div className="asset-item">
                           <div className="asset-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', position: 'relative' }}>
-                            <img src="/logo3.jpg" alt="NOC" style={{ width: '40px', height: '40px', objectFit: 'contain', borderRadius: '50%' }} />
+                            <img src="/LOGO.png" alt="NOC" style={{ width: '40px', height: '40px', objectFit: 'contain', borderRadius: '50%' }} />
                             <div className="lock-icon" style={{ position: 'absolute', bottom: '-2px', right: '-2px', fontSize: '14px' }}>🔒</div>
                           </div>
                           <div className="asset-info flex-1">

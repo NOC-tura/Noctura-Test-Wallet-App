@@ -6843,7 +6843,7 @@ export default function App() {
             <div className="flex flex-col items-center gap-3">
               <p className="text-xl text-neutral-300 font-light">Welcome to</p>
               <img 
-                src="/NOC1.png" 
+                src="/NOCNOC.png" 
                 alt="NOCtura" 
                 style={{ height: '540px' }}
                 className="w-auto"

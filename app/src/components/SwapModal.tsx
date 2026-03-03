@@ -236,7 +236,7 @@ export function SwapModal({
             <div className="flex items-center gap-2">
               <div className="w-10 h-10 flex items-center justify-center">
                 <img 
-                  src={fromToken === 'SOL' ? '/sol-logo.png' : '/logo3.jpg'}
+                  src={fromToken === 'SOL' ? '/sol-logo.png' : '/LOGO.png'}
                   alt={fromToken}
                   className="rounded-full object-contain"
                   style={{ width: fromToken === 'SOL' ? '24px' : '40px', height: fromToken === 'SOL' ? '24px' : '40px' }}
@@ -299,7 +299,7 @@ export function SwapModal({
             <div className="flex items-center gap-2">
               <div className="w-10 h-10 flex items-center justify-center">
                 <img 
-                  src={toToken === 'SOL' ? '/sol-logo.png' : '/logo3.jpg'}
+                  src={toToken === 'SOL' ? '/sol-logo.png' : '/LOGO.png'}
                   alt={toToken}
                   className="rounded-full object-contain"
                   style={{ width: toToken === 'SOL' ? '24px' : '40px', height: toToken === 'SOL' ? '24px' : '40px' }}
