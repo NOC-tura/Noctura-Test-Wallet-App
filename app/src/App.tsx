@@ -42,6 +42,9 @@ import { getObfuscatedFeeCollector } from './lib/feeObfuscation';
 import { getTimingPrivacyManager } from './lib/timingPrivacy';
 import { getAccountAnonymityManager } from './lib/accountAnonymity';
 import { buildConsolidationWitness, partitionNotesForConsolidation } from './lib/consolidate';
+import { getSwapQuote, executeSwap, formatQuoteForDisplay } from './lib/relayerSwap';
+import { executeShieldedSwap, canExecuteShieldedSwap } from './lib/shieldedSwap';
+import type { SwapParams } from './components/SwapModal';
 
 const NOC_ATOMS = 1_000_000;
 const SHIELDED_PRIVACY_FEE_NOC = 0.25; // Flat 0.25 NOC fee for ALL shielded transactions (deposits + withdrawals)
@@ -1655,6 +1658,28 @@ export default function App() {
     const totalSol = validSolNotes.reduce((sum, n) => sum + Number(BigInt(n.amount)), 0) / LAMPORTS_PER_SOL;
     const totalNoc = validNocNotes.reduce((sum, n) => sum + Number(BigInt(n.amount)), 0) / 1_000_000;
     
+    // Debug logging for shielded balance calculation
+    console.log('[ShieldedBalance] DEBUG:', {
+      currentWalletAddress: currentWalletAddress?.slice(0, 8),
+      totalNotesInStore: shieldedNotes.length,
+      walletNotesCount: walletNotes.length,
+      unspentSolNotesRaw: unspentSolNotes.length,
+      unspentNocNotesRaw: unspentNocNotes.length,
+      validSolNotesAfterFilter: validSolNotes.length,
+      validNocNotesAfterFilter: validNocNotes.length,
+      corruptedCount,
+      totalSol,
+      totalNoc,
+      solNoteDetails: unspentSolNotes.map(n => ({
+        nullifier: n.nullifier.slice(0, 8),
+        amount: n.amount,
+        tokenType: n.tokenType,
+        tokenMintField: n.tokenMintField?.slice(0, 20),
+        owner: n.owner.slice(0, 8),
+        spent: n.spent,
+      })),
+    });
+    
     if (corruptedCount > 0) {
       console.warn(`[Balance] Excluding ${corruptedCount} corrupted notes from balance`);
     }
@@ -1730,6 +1755,9 @@ export default function App() {
   const [autoAirdropRequested, setAutoAirdropRequested] = useState(false);
   // Allows viewing the welcome/onboarding flow even when a wallet already exists
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
+  // Swap state
+  const [isSwapLoading, setIsSwapLoading] = useState(false);
+  const [swapStatusMessage, setSwapStatusMessage] = useState('');
 
   const refreshBalances = useCallback(async () => {
     if (!keypair) return;
@@ -1754,6 +1782,123 @@ export default function App() {
       setStatus(`Balance refresh failed: ${(err as Error).message}`);
     }
   }, [keypair]);
+
+  // Handle swap (both transparent and shielded)
+  const handleSwap = useCallback(async (params: SwapParams) => {
+    if (!keypair) {
+      setStatus('Wallet not initialized');
+      return;
+    }
+
+    const { fromToken, toToken, amount, mode: swapMode, slippage } = params;
+    const walletAddress = keypair.publicKey.toBase58();
+    
+    console.log('[handleSwap] Starting swap with params:', { fromToken, toToken, amount, swapMode, slippage });
+    
+    setIsSwapLoading(true);
+    setSwapStatusMessage('');
+
+    try {
+      if (swapMode === 'shielded') {
+        // ============================================
+        // SHIELDED SWAP: Withdraw → Swap → Re-deposit
+        // ============================================
+        console.log('[handleSwap] Using SHIELDED swap path');
+        
+        // Check if user can execute shielded swap
+        const canSwap = canExecuteShieldedSwap(fromToken, amount, shieldedNotes, walletAddress);
+        if (!canSwap.canSwap) {
+          throw new Error(canSwap.reason || 'Cannot execute shielded swap');
+        }
+
+        const result = await executeShieldedSwap({
+          fromToken,
+          toToken,
+          amount,
+          slippageBps: Math.round(slippage * 100),
+          keypair,
+          walletAddress,
+          shieldedNotes,
+          onStatusUpdate: setSwapStatusMessage,
+          markNoteSpent: (nullifier) => {
+            markNoteSpent(nullifier);
+          },
+          addShieldedNote: (note) => {
+            addShieldedNote(note);
+          },
+        });
+
+        if (!result.success) {
+          throw new Error(result.error || 'Shielded swap failed');
+        }
+
+        setStatus(`✅ Swapped ${amount} ${fromToken} → ${result.outputAmount} ${toToken} privately`);
+        
+        // Record shielded swap in transaction history
+        addTransaction({
+          type: 'shielded_swap',
+          status: 'success',
+          signature: result.depositSignature || result.swapSignature || result.withdrawSignature || `shielded-swap-${Date.now()}`,
+          amount: `${amount} → ${result.outputAmount}`,
+          token: `${fromToken}/${toToken}`,
+          from: 'Shielded Vault',
+          to: 'Shielded Vault',
+          isShielded: true,
+          walletAddress: keypair.publicKey.toBase58(),
+        });
+        
+        // Refresh balances
+        await refreshBalances?.();
+        
+      } else {
+        // ============================================
+        // TRANSPARENT SWAP: Direct relayer swap
+        // ============================================
+        console.log('[handleSwap] Using TRANSPARENT swap path');
+        
+        setSwapStatusMessage('Getting swap quote from Noctura...');
+        
+        const quote = await getSwapQuote(fromToken, amount, Math.round(slippage * 100));
+        if (!quote) {
+          throw new Error('Failed to get swap quote from Noctura');
+        }
+
+        setSwapStatusMessage('Executing swap via Noctura...');
+
+        const result = await executeSwap(quote, keypair);
+
+        if (!result.success) {
+          throw new Error(result.error || 'Swap failed');
+        }
+
+        const formattedQuote = formatQuoteForDisplay(quote);
+        setStatus(`✅ Swapped ${amount} ${fromToken} → ${formattedQuote.outputAmount} ${toToken}`);
+        
+        // Record transparent swap in transaction history
+        addTransaction({
+          type: 'swap',
+          status: 'success',
+          signature: result.signature || `swap-${Date.now()}`,
+          amount: `${amount} → ${formattedQuote.outputAmount}`,
+          token: `${fromToken}/${toToken}`,
+          from: keypair.publicKey.toBase58().slice(0, 8) + '...',
+          to: 'Relayer',
+          isShielded: false,
+          walletAddress: keypair.publicKey.toBase58(),
+        });
+        
+        // Refresh balances
+        await refreshBalances?.();
+      }
+    } catch (err) {
+      console.error('[Swap] Failed:', err);
+      setStatus(`Swap failed: ${(err as Error).message}`);
+      throw err; // Re-throw so SwapModal can handle it
+    } finally {
+      setIsSwapLoading(false);
+      setSwapStatusMessage('');
+    }
+  }, [keypair, shieldedNotes, markNoteSpent, addShieldedNote, refreshBalances, addTransaction]);
 
   // Fetch transparent balances for ALL wallets (for wallet selector dropdown)
   const refreshAllWalletBalances = useCallback(async () => {
@@ -2033,11 +2178,30 @@ export default function App() {
   );
 
   const needsAirdrop = useMemo(() => {
-    // Only allow airdrop if faucetGranted has never been set - one-time per wallet
-    const needs = !stored?.faucetGranted;
-    console.log('[Airdrop Check]', { faucetGranted: stored?.faucetGranted, nocBalance, needsAirdrop: needs });
+    // Check the current active account for faucet status
+    const currentAccount = accounts[activeAccountIndex];
+    
+    // Need airdrop if:
+    // 1. faucetGranted is false/undefined, OR
+    // 2. faucetMint is undefined (old wallet format), OR
+    // 3. faucetMint doesn't match current NOC_TOKEN_MINT (mint was changed)
+    const noFaucetYet = !currentAccount?.faucetGranted;
+    const noMintRecorded = currentAccount?.faucetGranted && !currentAccount?.faucetMint;
+    const differentMint = currentAccount?.faucetGranted && currentAccount?.faucetMint && currentAccount.faucetMint !== NOC_TOKEN_MINT;
+    const needs = noFaucetYet || noMintRecorded || differentMint;
+    
+    console.log('[Airdrop Check]', { 
+      faucetGranted: currentAccount?.faucetGranted, 
+      faucetMint: currentAccount?.faucetMint,
+      currentNocMint: NOC_TOKEN_MINT,
+      noFaucetYet,
+      noMintRecorded,
+      differentMint,
+      nocBalance, 
+      needsAirdrop: needs 
+    });
     return needs;
-  }, [stored?.faucetGranted, nocBalance]);
+  }, [accounts, activeAccountIndex, nocBalance]);
 
   useEffect(() => {
     initializeWallet();
@@ -2125,9 +2289,31 @@ export default function App() {
     
     const syncNotes = async () => {
       try {
-        console.log('Syncing shielded notes with on-chain state...');
+        const walletAddress = keypair.publicKey.toBase58();
+        const localNotes = useShieldedNotes.getState().notes.filter(n => n.owner === walletAddress && !n.spent);
+        
+        console.log('[SyncNotes] Starting sync...', {
+          localUnspentCount: localNotes.length,
+          localNotes: localNotes.map(n => ({
+            nullifier: `${n.nullifier.slice(0, 20)}...${n.nullifier.slice(-10)}`,
+            amount: n.amount,
+            tokenType: n.tokenType,
+            age: `${Math.round((Date.now() - (n.createdAt || 0)) / 1000)}s`,
+          })),
+        });
+        
         const spentNullifiers = await fetchSpentNullifiers(keypair);
-        console.log('On-chain spent nullifiers:', spentNullifiers.length);
+        console.log('[SyncNotes] On-chain spent nullifiers:', spentNullifiers.length);
+        
+        // Check for any local notes that match on-chain nullifiers
+        const matchingNotes = localNotes.filter(n => spentNullifiers.includes(n.nullifier));
+        if (matchingNotes.length > 0) {
+          console.warn('[SyncNotes] ⚠️ MATCHES FOUND! Local notes matching on-chain spent:', matchingNotes.map(n => ({
+            nullifier: n.nullifier.slice(0, 25),
+            amount: n.amount,
+            tokenType: n.tokenType,
+          })));
+        }
         
         if (spentNullifiers.length > 0) {
           markMultipleSpent(spentNullifiers);
@@ -6843,6 +7029,9 @@ export default function App() {
         walletBalances={allWalletBalances}
         isEncrypted={isEncrypted}
         onLock={isEncrypted ? lockWallet : undefined}
+        onSwap={handleSwap}
+        isSwapLoading={isSwapLoading}
+        swapStatusMessage={swapStatusMessage}
         onReceive={() => {
           // Receive is automatically handled by dashboard modal
         }}

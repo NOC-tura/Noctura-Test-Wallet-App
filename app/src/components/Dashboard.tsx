@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import '../styles/dashboard.css';
 import HowToUseModal from './HowToUseModal';
 import { WalletSelector } from './WalletSelector';
+import SwapModal, { SwapParams } from './SwapModal';
 
 interface WalletBalance {
   transparentSol: number;
@@ -37,6 +38,12 @@ interface DashboardProps {
   isEncrypted?: boolean;
   /** Callback to lock the wallet */
   onLock?: () => void;
+  /** Callback to execute swap */
+  onSwap?: (params: SwapParams) => Promise<void>;
+  /** Swap loading state */
+  isSwapLoading?: boolean;
+  /** Swap status message */
+  swapStatusMessage?: string;
 }
 
 export function Dashboard({
@@ -59,11 +66,15 @@ export function Dashboard({
   walletBalances = {},
   isEncrypted = false,
   onLock,
+  onSwap,
+  isSwapLoading = false,
+  swapStatusMessage = '',
 }: DashboardProps) {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
   const [showActivityModal, setShowActivityModal] = useState(false);
   const [showShieldModal, setShowShieldModal] = useState(false);
+  const [showSwapModal, setShowSwapModal] = useState(false);
   const [showPrivacySettings, setShowPrivacySettings] = useState(false);
   const [transactions, setTransactions] = useState<Array<{ signature: string; slot: number; timestamp: number; err: any; memo?: string }>>([]);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
@@ -77,8 +88,42 @@ export function Dashboard({
   const [howToUseOpen, setHowToUseOpen] = useState(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
   const qrShieldedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [solPriceUsd, setSolPriceUsd] = useState(100); // Default, will fetch real price
+  const nocPriceUsd = 0.30; // Fixed NOC price (not on exchanges)
 
   const isTransparent = mode === 'transparent';
+
+  // Fetch real SOL price from relayer
+  useEffect(() => {
+    const fetchPrice = async () => {
+      try {
+        const endpoints = [
+          'http://localhost:8787/swap/price',
+          'https://noctura-relayer.onrender.com/swap/price'
+        ];
+        for (const url of endpoints) {
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.solUsd && data.solUsd > 0) {
+                setSolPriceUsd(data.solUsd);
+                return;
+              }
+            }
+          } catch {
+            // Try next endpoint
+          }
+        }
+      } catch (err) {
+        console.warn('[Dashboard] Failed to fetch SOL price, using default');
+      }
+    };
+    fetchPrice();
+    // Refresh price every 60 seconds
+    const interval = setInterval(fetchPrice, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Generate QR code when modal opens or address changes
   useEffect(() => {
@@ -122,7 +167,7 @@ export function Dashboard({
   
   const displaySolBalance = isTransparent ? solBalance : shieldedSolBalance;
   const displayNocBalance = isTransparent ? nocBalance : shieldedNocBalance;
-  const totalUsd = displaySolBalance * 129.74 + displayNocBalance * 0.5; // Mock prices
+  const totalUsd = displaySolBalance * solPriceUsd + displayNocBalance * nocPriceUsd;
   
   const handleCopyAddress = useCallback(() => {
     navigator.clipboard.writeText(walletAddress);
@@ -146,6 +191,17 @@ export function Dashboard({
       setShowShieldModal(true);
     }
   }, [isTransparent]);
+
+  const handleSwapClick = useCallback(() => {
+    setShowSwapModal(true);
+  }, []);
+
+  const handleSwap = useCallback(async (params: SwapParams) => {
+    if (onSwap) {
+      await onSwap(params);
+      // Close modal on successful swap (parent will handle errors)
+    }
+  }, [onSwap]);
 
   const sendDisabled = !sendAmount || !sendRecipient || isNaN(parseFloat(sendAmount));
 
@@ -458,6 +514,27 @@ export function Dashboard({
                         </svg>
                         Make Private
                       </button>
+                      {onSwap && (
+                        <button
+                          className="action-btn"
+                          onClick={handleSwapClick}
+                          title={isTransparent 
+                            ? 'Swap SOL ↔ NOC via Jupiter (public)' 
+                            : 'Private swap from shielded balance'}
+                          style={{
+                            borderColor: `${themeColor}4D`,
+                            color: themeColor,
+                          }}
+                        >
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M16 3l4 4-4 4"/>
+                            <path d="M20 7H4"/>
+                            <path d="M8 21l-4-4 4-4"/>
+                            <path d="M4 17h16"/>
+                          </svg>
+                          {isTransparent ? 'Swap' : 'Private Swap'}
+                        </button>
+                      )}
                       {isTransparent && onRequestSolFaucet && (
                         <button
                           className="action-btn"
@@ -1158,6 +1235,20 @@ export function Dashboard({
 
         {/* How To Use Modal */}
         <HowToUseModal open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
+
+        {/* Swap Modal */}
+        <SwapModal
+          isOpen={showSwapModal}
+          onClose={() => setShowSwapModal(false)}
+          mode={mode}
+          transparentSolBalance={solBalance}
+          transparentNocBalance={nocBalance}
+          shieldedSolBalance={shieldedSolBalance}
+          shieldedNocBalance={shieldedNocBalance}
+          onSwap={handleSwap}
+          isLoading={isSwapLoading}
+          statusMessage={swapStatusMessage}
+        />
         
         {/* Mobile Bottom Navigation - only visible on mobile */}
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[#0d1225]/95 backdrop-blur-md border-t border-white/10 z-50">

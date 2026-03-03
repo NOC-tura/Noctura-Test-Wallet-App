@@ -366,9 +366,12 @@ const creator: StateCreator<WalletState> = (set, get) => ({
     const accounts = [...state.accounts];
     
     if (stored && accounts[state.activeAccountIndex]) {
+      // Import NOC mint to track which mint the airdrop was for
+      const { NOC_TOKEN_MINT } = await import('../lib/constants');
       accounts[state.activeAccountIndex] = {
         ...accounts[state.activeAccountIndex],
         faucetGranted: true,
+        faucetMint: NOC_TOKEN_MINT,
       };
       
       const newStored = { 

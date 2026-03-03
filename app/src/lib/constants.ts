@@ -6,8 +6,8 @@ function readEnv(key: string, fallback = ''): string {
   return metaEnv[key]?.trim() || nodeEnv[key]?.trim() || fallback;
 }
 
-// Devnet NOC mint (2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb)
-export const NOC_TOKEN_MINT = '2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb';
+// Devnet NOC mint (FAPAn9p8guXxrCqqNXsxX8qLSzLFqmKojeejobsh3sPg)
+export const NOC_TOKEN_MINT = 'FAPAn9p8guXxrCqqNXsxX8qLSzLFqmKojeejobsh3sPg';
 
 // Wrapped SOL mint - used ONLY for Solana SPL Token operations (ATAs)
 // NOT used in ZK circuits - those use simple constant 1n for SOL

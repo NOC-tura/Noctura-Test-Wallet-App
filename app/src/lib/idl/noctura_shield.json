@@ -175,6 +175,119 @@
       ]
     },
     {
+      "name": "setSwapVerifier",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "swapVerifier",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "verifyingKey",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "initSwapVerifierChunked",
+      "docs": [
+        "Initialize swap verifier for chunked upload (use when key is too large for single tx)"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "swapVerifier",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "appendSwapVerifierChunk",
+      "docs": [
+        "Append chunk to swap verifier"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "swapVerifier",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "chunk",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "finalizeSwapVerifier",
+      "docs": [
+        "Finalize swap verifier (validate the complete key)"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "swapVerifier",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "setFee",
       "docs": [
         "Admin function to update shield fee (in basis points)"
@@ -220,6 +333,129 @@
         {
           "name": "newFeeCollector",
           "type": "publicKey"
+        }
+      ]
+    },
+    {
+      "name": "resetNullifiers",
+      "docs": [
+        "Admin function to reset the nullifier set (for devnet testing only)",
+        "WARNING: This allows double-spending of previously spent notes!"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "nullifierSet",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "adminWithdrawVaultNoc",
+      "docs": [
+        "Admin function to withdraw NOC from vault (for devnet corrections)"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "destination",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "adminWithdrawLegacyVault",
+      "docs": [
+        "Admin withdraw from legacy vault (vault-authority PDA without mint)"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "legacyVaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "destination",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
         }
       ]
     },
@@ -333,6 +569,89 @@
         {
           "name": "priorityLane",
           "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "transparentDepositSol",
+      "docs": [
+        "Transparent deposit for native SOL: deposit from payer to vault PDA",
+        "This adds the commitment to the Merkle tree, enabling later withdrawal"
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "merkleTree",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "nullifierSet",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "verifier",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "solVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "commitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "nullifier",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "proof",
+          "type": "bytes"
+        },
+        {
+          "name": "publicInputs",
+          "type": {
+            "vec": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
         }
       ]
     },
@@ -642,6 +961,292 @@
           "type": "bytes"
         }
       ]
+    },
+    {
+      "name": "emergencyResetNullifiers",
+      "docs": [
+        "DEVNET ONLY: Emergency reset nullifiers without admin check",
+        "This allows resetting the nullifier set when admin keypair is lost"
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "nullifierSet",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initTokenVault",
+      "docs": [
+        "Admin function to initialize a vault token account for a specific mint",
+        "This creates the vault PDA without requiring a deposit"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initializeShieldedPool",
+      "docs": [
+        "Initialize the shielded liquidity pool"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "swapFeeBps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "seedShieldedPool",
+      "docs": [
+        "Add initial liquidity to the shielded pool (admin only, from vault reserves)",
+        "This seeds the pool using existing vault deposits"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "globalState",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "solAmount",
+          "type": "u64"
+        },
+        {
+          "name": "nocAmount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "addPoolLiquidity",
+      "docs": [
+        "Add more liquidity to the shielded pool (admin only)",
+        "Simply increases the reserves without requiring the initial zero check"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "solAmount",
+          "type": "u64"
+        },
+        {
+          "name": "nocAmount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "setPoolReserves",
+      "docs": [
+        "Admin function to directly set pool reserves (for corrections)"
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "solReserve",
+          "type": "u64"
+        },
+        {
+          "name": "nocReserve",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "shieldedPoolSwap",
+      "docs": [
+        "Execute a shielded swap within the pool",
+        "User provides ZK proof of valid input note, receives output note",
+        "No tokens leave the shielded system!"
+      ],
+      "accounts": [
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "merkleTree",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "nullifierSet",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "swapVerifier",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "inputAmount",
+          "type": "u64"
+        },
+        {
+          "name": "minOutputAmount",
+          "type": "u64"
+        },
+        {
+          "name": "inputIsSol",
+          "type": "bool"
+        },
+        {
+          "name": "inputNullifier",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "outputCommitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "proof",
+          "type": "bytes"
+        },
+        {
+          "name": "publicInputs",
+          "type": {
+            "vec": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "getPoolReserves",
+      "docs": [
+        "Get pool reserves (view function)"
+      ],
+      "accounts": [
+        {
+          "name": "shieldedPool",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -743,6 +1348,67 @@
       }
     },
     {
+      "name": "ShieldedPool",
+      "docs": [
+        "Shielded Liquidity Pool State",
+        "Implements constant-product AMM (x * y = k) entirely within the shielded system"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "docs": [
+              "Admin who can manage pool"
+            ],
+            "type": "publicKey"
+          },
+          {
+            "name": "solReserve",
+            "docs": [
+              "Total shielded SOL in pool (in lamports)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nocReserve",
+            "docs": [
+              "Total shielded NOC in pool (in atomic units, 6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lpTotalSupply",
+            "docs": [
+              "LP token total supply (for tracking liquidity provider shares)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "swapFeeBps",
+            "docs": [
+              "Swap fee in basis points (e.g., 30 = 0.30%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump seed for PDA"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "enabled",
+            "docs": [
+              "Pool enabled flag"
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
       "name": "VerifierAccount",
       "type": {
         "kind": "struct",
@@ -807,6 +1473,76 @@
               32
             ]
           },
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ShieldedPoolInitialized",
+      "fields": [
+        {
+          "name": "admin",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "swapFeeBps",
+          "type": "u16",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ShieldedPoolSeeded",
+      "fields": [
+        {
+          "name": "nocReserve",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "solReserve",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ShieldedSwapExecuted",
+      "fields": [
+        {
+          "name": "inputNullifier",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          },
+          "index": false
+        },
+        {
+          "name": "outputCommitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          },
+          "index": false
+        },
+        {
+          "name": "isNocToSol",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "inputAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "outputAmount",
+          "type": "u64",
           "index": false
         }
       ]

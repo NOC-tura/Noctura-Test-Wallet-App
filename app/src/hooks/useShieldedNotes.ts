@@ -49,13 +49,24 @@ export const useShieldedNotes = create<ShieldedState>()(
             leafIndex,
             createdAt: note.createdAt ?? Date.now(),
           };
-          console.log('[useShieldedNotes] Adding note to store:', {
-            nullifier: enriched.nullifier.slice(0, 16),
-            amount: enriched.amount,
-            tokenType: enriched.tokenType,
-            leafIndex: enriched.leafIndex,
-            totalNotesAfter: state.notes.length + 1,
-          });
+          
+          // LOG SOL NOTES MORE PROMINENTLY
+          if (note.tokenType === 'SOL') {
+            console.log('🟢 [SOL NOTE ADDED] ===========================');
+            console.log('  Nullifier (full):', enriched.nullifier);
+            console.log('  Amount:', enriched.amount, 'lamports =', Number(enriched.amount) / 1e9, 'SOL');
+            console.log('  CreatedAt:', new Date(enriched.createdAt || 0).toISOString());
+            console.log('  LeafIndex:', enriched.leafIndex);
+            console.log('===============================================');
+          } else {
+            console.log('[useShieldedNotes] Adding note to store:', {
+              nullifier: enriched.nullifier.slice(0, 16),
+              amount: enriched.amount,
+              tokenType: enriched.tokenType,
+              leafIndex: enriched.leafIndex,
+              totalNotesAfter: state.notes.length + 1,
+            });
+          }
           
           const newState = {
             notes: [...state.notes, enriched].sort((a, b) => a.leafIndex - b.leafIndex),
@@ -135,11 +146,63 @@ export const useShieldedNotes = create<ShieldedState>()(
           return { notes: newNotes };
         }),
       markMultipleSpent: (nullifiers) =>
-        set((state) => ({
-          notes: state.notes.map((note) =>
-            nullifiers.includes(note.nullifier) ? { ...note, spent: true } : note
-          ),
-        })),
+        set((state) => {
+          const NOW = Date.now();
+          // INCREASED: 5 minutes protection for auto-sync
+          // Notes should only be marked spent through explicit withdrawal actions,
+          // not through automatic on-chain nullifier sync
+          const RECENT_THRESHOLD = 300_000; // 5 minutes
+          
+          // Filter out notes that were created very recently (can't have been spent yet)
+          const notesToMark = state.notes.filter(note => {
+            if (note.spent) return false;
+            if (!nullifiers.includes(note.nullifier)) return false;
+            
+            // PROTECTION: Don't mark notes created within threshold as spent
+            // A newly deposited note cannot have been spent on-chain yet
+            const age = NOW - (note.createdAt || 0);
+            if (age < RECENT_THRESHOLD) {
+              console.warn(`[markMultipleSpent] SKIPPING recent note (age: ${Math.round(age/1000)}s, threshold: ${RECENT_THRESHOLD/1000}s):`, {
+                nullifier: note.nullifier.slice(0, 20),
+                amount: note.amount,
+                tokenType: note.tokenType,
+                createdAt: new Date(note.createdAt || 0).toISOString(),
+              });
+              return false; // Don't mark as spent
+            }
+            
+            return true;
+          });
+          
+          // Log SOL notes that are about to be marked spent
+          const solNotesToMark = notesToMark.filter(note => note.tokenType === 'SOL');
+          if (solNotesToMark.length > 0) {
+            console.warn('[markMultipleSpent] ⚠️ SOL notes being marked as spent:', solNotesToMark.map(n => ({
+              nullifier: n.nullifier.slice(0, 16),
+              fullNullifier: n.nullifier,
+              amount: n.amount,
+              tokenType: n.tokenType,
+              createdAt: n.createdAt,
+              age: `${Math.round((NOW - (n.createdAt || 0)) / 1000)}s`,
+            })));
+            // Find which on-chain nullifier matched
+            solNotesToMark.forEach(note => {
+              const matchingOnChain = nullifiers.find(onChain => onChain === note.nullifier);
+              if (matchingOnChain) {
+                console.warn(`[markMultipleSpent] Matched on-chain nullifier: ${matchingOnChain.slice(0, 30)}`);
+              }
+            });
+          }
+          
+          // Build set of nullifiers that should be marked (excluding recent ones)
+          const nullifiersToMark = new Set(notesToMark.map(n => n.nullifier));
+          
+          return {
+            notes: state.notes.map((note) =>
+              nullifiersToMark.has(note.nullifier) ? { ...note, spent: true } : note
+            ),
+          };
+        }),
       setWallet: (walletAddress) => set({ currentWallet: walletAddress }),
       getNotesForWallet: (walletAddress) => {
         return get().notes.filter((note) => note.owner === walletAddress);

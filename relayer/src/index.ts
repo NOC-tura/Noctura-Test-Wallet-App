@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { config, validateConfig } from './config.js';
 import relayRoutes from './routes/relay.js';
+import swapRoutes from './routes/swap.js';
 
 // Validate environment variables
 try {
@@ -28,6 +29,7 @@ app.use((req, _res, next) => {
 
 // Routes
 app.use('/relay', relayRoutes);
+app.use('/swap', swapRoutes);
 
 // Root endpoint
 app.get('/', (_req, res) => {
@@ -41,6 +43,10 @@ app.get('/', (_req, res) => {
       withdraw: 'POST /relay/withdraw',
       transfer: 'POST /relay/transfer',
       consolidate: 'POST /relay/consolidate',
+      swapPrice: 'GET /swap/price',
+      swapQuote: 'POST /swap/quote',
+      swapExecute: 'POST /swap/execute',
+      swapLiquidity: 'GET /swap/liquidity',
     },
   });
 });

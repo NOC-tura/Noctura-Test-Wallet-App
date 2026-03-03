@@ -66,9 +66,19 @@ export async function sendNocAirdrop(
     throw new Error('Wallet has already claimed the NOC faucet');
   }
 
+  console.log('[Airdrop] Mint:', mint.toBase58());
+  console.log('[Airdrop] Authority:', authority.publicKey.toBase58());
+  
   const authorityAta = await ensureAssociatedTokenAccount(connection, mint, authority.publicKey, authority);
+  console.log('[Airdrop] Authority ATA:', authorityAta.address.toBase58());
+  console.log('[Airdrop] Authority ATA raw amount:', authorityAta.amount?.toString());
+  
   const authorityBalance = BigInt(authorityAta.amount ?? 0n);
+  console.log('[Airdrop] Authority balance (BigInt):', authorityBalance.toString());
+  console.log('[Airdrop] Requested amount:', amount.toString());
+  
   if (authorityBalance < amount) {
+    console.log('[Airdrop] ERROR: Not enough balance. Have:', authorityBalance.toString(), 'Need:', amount.toString());
     throw new Error('Faucet authority does not hold enough NOC to satisfy request');
   }
   const userAta = await ensureAssociatedTokenAccount(connection, mint, destination, authority);

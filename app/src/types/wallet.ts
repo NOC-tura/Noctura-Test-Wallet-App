@@ -15,6 +15,8 @@ export interface WalletAccount {
   publicAddress: string;
   /** Whether this account has received faucet airdrop */
   faucetGranted?: boolean;
+  /** Which NOC mint address the faucet was granted for */
+  faucetMint?: string;
 }
 
 export interface StoredWallet {

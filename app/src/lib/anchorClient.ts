@@ -71,6 +71,8 @@ const WITHDRAW_VERIFIER_SEED = encoder.encode('withdraw-verifier');
 const TRANSFER_VERIFIER_SEED = encoder.encode('transfer-verifier');
 const VAULT_AUTHORITY_SEED = encoder.encode('vault-authority');
 const VAULT_TOKEN_SEED = encoder.encode('vault-token');
+const SHIELDED_POOL_SEED = encoder.encode('shielded-pool');
+const SWAP_VERIFIER_SEED = encoder.encode('swap-verifier');
 
 export function deriveShieldPdas(mint?: PublicKey) {
   const [globalState] = SolanaPublicKey.findProgramAddressSync([GLOBAL_STATE_SEED], programId);
@@ -79,9 +81,11 @@ export function deriveShieldPdas(mint?: PublicKey) {
   const [verifier] = SolanaPublicKey.findProgramAddressSync([VERIFIER_SEED], programId);
   const [withdrawVerifier] = SolanaPublicKey.findProgramAddressSync([WITHDRAW_VERIFIER_SEED], programId);
   const [transferVerifier] = SolanaPublicKey.findProgramAddressSync([TRANSFER_VERIFIER_SEED], programId);
+  const [shieldedPool] = SolanaPublicKey.findProgramAddressSync([SHIELDED_POOL_SEED], programId);
+  const [swapVerifier] = SolanaPublicKey.findProgramAddressSync([SWAP_VERIFIER_SEED], programId);
 
   if (!mint) {
-    return { globalState, merkleTree, nullifierSet, verifier, withdrawVerifier, transferVerifier };
+    return { globalState, merkleTree, nullifierSet, verifier, withdrawVerifier, transferVerifier, shieldedPool, swapVerifier };
   }
 
   const [vaultAuthority] = SolanaPublicKey.findProgramAddressSync(
@@ -102,5 +106,7 @@ export function deriveShieldPdas(mint?: PublicKey) {
     transferVerifier,
     vaultAuthority,
     vaultTokenAccount,
+    shieldedPool,
+    swapVerifier,
   };
 }

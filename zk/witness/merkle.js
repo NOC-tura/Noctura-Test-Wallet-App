@@ -11,12 +11,9 @@ function computeZeroHashes(height) {
 }
 const ZERO_HASHES = computeZeroHashes(TREE_HEIGHT);
 export class IncrementalMerkleTree {
-    height;
-    nodes;
-    nextLeafIndex = 0;
-    zeroHashes;
     constructor(height = TREE_HEIGHT) {
         this.height = height;
+        this.nextLeafIndex = 0;
         this.zeroHashes = ZERO_HASHES.slice(0, height + 1);
         // We need height+1 levels:
         // Level 0 = leaves (2^height elements)

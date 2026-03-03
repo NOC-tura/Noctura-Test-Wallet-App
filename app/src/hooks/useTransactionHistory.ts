@@ -12,7 +12,9 @@ export type TransactionType =
   | 'partial_receive'   // Receive from partial privacy transfer (transparent receive from shielded sender)
   | 'shielded_send'     // Shielded-to-shielded transfer (outgoing)
   | 'shielded_receive'  // Shielded-to-shielded transfer (incoming)
-  | 'consolidate';      // Note consolidation
+  | 'consolidate'       // Note consolidation
+  | 'swap'              // Transparent swap
+  | 'shielded_swap';    // Shielded pool swap
 
 export type TransactionStatus = 'success' | 'failed' | 'pending';
 
@@ -23,7 +25,7 @@ export interface TransactionRecord {
   timestamp: number;             // Unix timestamp in ms
   signature?: string;            // On-chain signature (if available)
   amount: string;                // Amount as string
-  token: 'SOL' | 'NOC';
+  token: string;                 // Token(s) involved (e.g., 'SOL', 'NOC', or 'NOC/SOL' for swaps)
   from?: string;                 // Sender address/label
   to?: string;                   // Recipient address/label
   fee?: string;                  // Fee paid
@@ -115,6 +117,10 @@ export function getTransactionDisplayInfo(type: TransactionType): { icon: string
       return { icon: '🔐', label: 'Private Receive' };
     case 'consolidate':
       return { icon: '🔄', label: 'Consolidate' };
+    case 'swap':
+      return { icon: '🔃', label: 'Swap' };
+    case 'shielded_swap':
+      return { icon: '🔒🔃', label: 'Private Swap' };
     default:
       return { icon: '📋', label: 'Transaction' };
   }

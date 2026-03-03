@@ -25,6 +25,7 @@ const WITHDRAW_VERIFIER_SEED: &[u8] = b"withdraw-verifier";
 const TRANSFER_VERIFIER_SEED: &[u8] = b"transfer-verifier";
 const PARTIAL_WITHDRAW_VERIFIER_SEED: &[u8] = b"partial-withdraw-verifier";
 const VAULT_AUTHORITY_SEED: &[u8] = b"vault-authority";
+const LEGACY_VAULT_AUTHORITY_SEED: &[u8] = b"vault-authority"; // For vaults without mint suffix
 const VAULT_TOKEN_SEED: &[u8] = b"vault-token";
 const SOL_VAULT_SEED: &[u8] = b"sol-vault";
 
@@ -86,6 +87,35 @@ pub mod noctura_shield {
         Ok(())
     }
 
+    pub fn set_swap_verifier(ctx: Context<SetSwapVerifier>, verifying_key: Vec<u8>) -> Result<()> {
+        validate_verifier_key_blob(&verifying_key)?;
+        ctx.accounts.swap_verifier.verifying_key = verifying_key;
+        msg!("Swap verifier set");
+        Ok(())
+    }
+
+    /// Initialize swap verifier for chunked upload (use when key is too large for single tx)
+    pub fn init_swap_verifier_chunked(ctx: Context<InitSwapVerifierChunked>) -> Result<()> {
+        ctx.accounts.swap_verifier.verifying_key = Vec::new();
+        msg!("Swap verifier initialized for chunked upload");
+        Ok(())
+    }
+
+    /// Append chunk to swap verifier
+    pub fn append_swap_verifier_chunk(ctx: Context<AppendSwapVerifierChunk>, chunk: Vec<u8>) -> Result<()> {
+        let chunk_len = chunk.len();
+        ctx.accounts.swap_verifier.verifying_key.extend(chunk);
+        msg!("Appended {} bytes to swap verifier, total: {}", chunk_len, ctx.accounts.swap_verifier.verifying_key.len());
+        Ok(())
+    }
+
+    /// Finalize swap verifier (validate the complete key)
+    pub fn finalize_swap_verifier(ctx: Context<FinalizeSwapVerifier>) -> Result<()> {
+        validate_verifier_key_blob(&ctx.accounts.swap_verifier.verifying_key)?;
+        msg!("Swap verifier finalized with {} bytes", ctx.accounts.swap_verifier.verifying_key.len());
+        Ok(())
+    }
+
     /// Admin function to update shield fee (in basis points)
     pub fn set_fee(ctx: Context<SetFee>, shield_fee_bps: u16, priority_fee_bps: u16) -> Result<()> {
         let global = &mut ctx.accounts.global_state;
@@ -108,6 +138,52 @@ pub mod noctura_shield {
         require!(ctx.accounts.admin.key() == global.admin, ShieldError::Unauthorized);
         ctx.accounts.nullifier_set.nullifiers = Vec::new();
         msg!("Nullifier set reset by admin");
+        Ok(())
+    }
+
+    /// Admin function to withdraw NOC from vault (for devnet corrections)
+    pub fn admin_withdraw_vault_noc(
+        ctx: Context<AdminWithdrawVaultNoc>,
+        amount: u64,
+    ) -> Result<()> {
+        let vault_bump = ctx.bumps.vault_authority;
+        let mint_key = ctx.accounts.mint.key();
+        let seeds = &[VAULT_AUTHORITY_SEED, mint_key.as_ref(), &[vault_bump]];
+        let signer = &[&seeds[..]];
+
+        let transfer_ctx = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.destination.to_account_info(),
+            authority: ctx.accounts.vault_authority.to_account_info(),
+        };
+        token::transfer(
+            CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), transfer_ctx, signer),
+            amount,
+        )?;
+        msg!("Admin withdrew {} tokens from vault", amount);
+        Ok(())
+    }
+
+    /// Admin withdraw from legacy vault (vault-authority PDA without mint)
+    pub fn admin_withdraw_legacy_vault(
+        ctx: Context<AdminWithdrawLegacyVault>,
+        amount: u64,
+    ) -> Result<()> {
+        let vault_bump = ctx.bumps.legacy_vault_authority;
+        // Legacy vault uses just "vault-authority" seed without mint
+        let seeds = &[LEGACY_VAULT_AUTHORITY_SEED, &[vault_bump]];
+        let signer = &[&seeds[..]];
+
+        let transfer_ctx = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.destination.to_account_info(),
+            authority: ctx.accounts.legacy_vault_authority.to_account_info(),
+        };
+        token::transfer(
+            CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), transfer_ctx, signer),
+            amount,
+        )?;
+        msg!("Admin withdrew {} tokens from legacy vault", amount);
         Ok(())
     }
 
@@ -154,6 +230,45 @@ pub mod noctura_shield {
             nullifier,
             new_root,
             is_priority: priority_lane,
+        });
+
+        Ok(())
+    }
+
+    /// Transparent deposit for native SOL: deposit from payer to vault PDA
+    /// This adds the commitment to the Merkle tree, enabling later withdrawal
+    pub fn transparent_deposit_sol(
+        ctx: Context<TransparentDepositSol>,
+        commitment: [u8; 32],
+        nullifier: [u8; 32],
+        amount: u64,
+        proof: Vec<u8>,
+        public_inputs: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        require!(amount > 0, ShieldError::InvalidAmount);
+        verify_groth16(&ctx.accounts.verifier, &proof, &public_inputs)?;
+
+        // Transfer native SOL from payer to vault
+        anchor_lang::solana_program::program::invoke(
+            &anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.sol_vault.key(),
+                amount,
+            ),
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.sol_vault.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+
+        // Add commitment to Merkle tree
+        let new_root = ctx.accounts.merkle_tree.append_leaf(commitment)?;
+        emit!(CommitmentInserted {
+            commitment,
+            nullifier,
+            new_root,
+            is_priority: false,
         });
 
         Ok(())
@@ -309,6 +424,183 @@ pub mod noctura_shield {
         msg!("Nullifier set cleared, new count: {}", ctx.accounts.nullifier_set.nullifiers.len());
         Ok(())
     }
+
+    /// Admin function to initialize a vault token account for a specific mint
+    /// This creates the vault PDA without requiring a deposit
+    pub fn init_token_vault(ctx: Context<InitTokenVault>) -> Result<()> {
+        // Vault is created by the init_if_needed constraint
+        msg!("Vault token account initialized for mint: {}", ctx.accounts.mint.key());
+        msg!("Vault address: {}", ctx.accounts.vault_token_account.key());
+        Ok(())
+    }
+
+    // ============================================
+    // SHIELDED LIQUIDITY POOL INSTRUCTIONS
+    // ============================================
+
+    /// Initialize the shielded liquidity pool
+    pub fn initialize_shielded_pool(
+        ctx: Context<InitializeShieldedPool>,
+        swap_fee_bps: u16,
+    ) -> Result<()> {
+        require!(swap_fee_bps <= 1000, ShieldError::InvalidAmount); // Max 10% fee
+
+        let pool = &mut ctx.accounts.shielded_pool;
+        pool.admin = ctx.accounts.admin.key();
+        pool.sol_reserve = 0;
+        pool.noc_reserve = 0;
+        pool.lp_total_supply = 0;
+        pool.swap_fee_bps = swap_fee_bps;
+        pool.bump = ctx.bumps.shielded_pool;
+        pool.enabled = true;
+
+        msg!("Shielded pool initialized with {}bps fee", swap_fee_bps);
+        Ok(())
+    }
+
+    /// Add initial liquidity to the shielded pool (admin only, from vault reserves)
+    /// This seeds the pool using existing vault deposits
+    pub fn seed_shielded_pool(
+        ctx: Context<SeedShieldedPool>,
+        sol_amount: u64,
+        noc_amount: u64,
+    ) -> Result<()> {
+        require!(sol_amount > 0 && noc_amount > 0, ShieldError::InvalidAmount);
+
+        let pool = &mut ctx.accounts.shielded_pool;
+        require!(pool.enabled, ShieldError::InvalidAmount);
+        require!(pool.sol_reserve == 0 && pool.noc_reserve == 0, ShieldError::InvalidAmount);
+
+        // Update pool reserves (tokens are already in the vaults)
+        pool.sol_reserve = sol_amount;
+        pool.noc_reserve = noc_amount;
+        // LP tokens = sqrt(sol * noc)
+        pool.lp_total_supply = isqrt((sol_amount as u128) * (noc_amount as u128)) as u64;
+
+        msg!("Shielded pool seeded: {} SOL, {} NOC, {} LP tokens", 
+            sol_amount, noc_amount, pool.lp_total_supply);
+        Ok(())
+    }
+
+    /// Add more liquidity to the shielded pool (admin only)
+    /// Simply increases the reserves without requiring the initial zero check
+    pub fn add_pool_liquidity(
+        ctx: Context<AddPoolLiquidity>,
+        sol_amount: u64,
+        noc_amount: u64,
+    ) -> Result<()> {
+        let pool = &mut ctx.accounts.shielded_pool;
+        require!(pool.enabled, ShieldError::InvalidAmount);
+
+        if sol_amount > 0 {
+            pool.sol_reserve = pool.sol_reserve.checked_add(sol_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+        }
+        if noc_amount > 0 {
+            pool.noc_reserve = pool.noc_reserve.checked_add(noc_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+        }
+
+        // Recalculate LP supply based on new reserves
+        let new_lp = isqrt((pool.sol_reserve as u128) * (pool.noc_reserve as u128)) as u64;
+        pool.lp_total_supply = new_lp;
+
+        msg!("Added liquidity: {} SOL, {} NOC. New reserves: {} SOL, {} NOC", 
+            sol_amount, noc_amount, pool.sol_reserve, pool.noc_reserve);
+        Ok(())
+    }
+
+    /// Admin function to directly set pool reserves (for corrections)
+    pub fn set_pool_reserves(
+        ctx: Context<SetPoolReserves>,
+        sol_reserve: u64,
+        noc_reserve: u64,
+    ) -> Result<()> {
+        let pool = &mut ctx.accounts.shielded_pool;
+        
+        pool.sol_reserve = sol_reserve;
+        pool.noc_reserve = noc_reserve;
+        pool.lp_total_supply = isqrt((sol_reserve as u128) * (noc_reserve as u128)) as u64;
+        pool.enabled = true; // Always enable when reserves are set
+
+        msg!("Pool reserves set: {} SOL, {} NOC (enabled)", sol_reserve, noc_reserve);
+        Ok(())
+    }
+
+    /// Execute a shielded swap within the pool
+    /// User provides ZK proof of valid input note, receives output note
+    /// No tokens leave the shielded system!
+    pub fn shielded_pool_swap(
+        ctx: Context<ShieldedPoolSwap>,
+        input_amount: u64,
+        min_output_amount: u64,
+        input_is_sol: bool, // true = SOL->NOC, false = NOC->SOL
+        input_nullifier: [u8; 32],
+        output_commitment: [u8; 32],
+        proof: Vec<u8>,
+        public_inputs: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        require!(input_amount > 0, ShieldError::InvalidAmount);
+
+        // Verify ZK proof
+        verify_groth16(&ctx.accounts.swap_verifier, &proof, &public_inputs)?;
+
+        // Track nullifier (prevents double-spend)
+        track_nullifier(&mut ctx.accounts.nullifier_set, input_nullifier)?;
+
+        let pool = &mut ctx.accounts.shielded_pool;
+        require!(pool.enabled, ShieldError::InvalidAmount);
+
+        // Calculate output using AMM formula
+        let output_amount = pool.calculate_output(input_amount, input_is_sol)
+            .ok_or(error!(ShieldError::InvalidAmount))?;
+
+        // Slippage check
+        require!(output_amount >= min_output_amount, ShieldError::InvalidAmount);
+
+        // Update pool reserves
+        if input_is_sol {
+            pool.sol_reserve = pool.sol_reserve.checked_add(input_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.noc_reserve = pool.noc_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        } else {
+            pool.noc_reserve = pool.noc_reserve.checked_add(input_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.sol_reserve = pool.sol_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        }
+
+        // Add output commitment to Merkle tree
+        let _new_root = ctx.accounts.merkle_tree.append_leaf(output_commitment)?;
+
+        emit!(ShieldedSwapExecuted {
+            input_nullifier,
+            output_commitment,
+            is_noc_to_sol: !input_is_sol,
+            input_amount,
+            output_amount,
+        });
+
+        emit!(NullifierConsumed { nullifier: input_nullifier });
+
+        msg!("Shielded swap: {} {} -> {} {}", 
+            input_amount, 
+            if input_is_sol { "SOL" } else { "NOC" },
+            output_amount,
+            if input_is_sol { "NOC" } else { "SOL" }
+        );
+
+        Ok(())
+    }
+
+    /// Get pool reserves (view function)
+    pub fn get_pool_reserves(ctx: Context<GetPoolReserves>) -> Result<()> {
+        let pool = &ctx.accounts.shielded_pool;
+        msg!("Pool reserves: {} SOL, {} NOC, fee: {}bps", 
+            pool.sol_reserve, pool.noc_reserve, pool.swap_fee_bps);
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -398,6 +690,57 @@ pub struct EmergencyResetNullifiers<'info> {
     pub nullifier_set: Account<'info, NullifierSetAccount>,
 }
 
+/// Admin withdraw NOC from vault
+#[derive(Accounts)]
+pub struct AdminWithdrawVaultNoc<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump, has_one = admin)]
+    pub global_state: Account<'info, GlobalState>,
+    pub mint: Account<'info, Mint>,
+    /// CHECK: PDA authority for the vault
+    #[account(
+        seeds = [VAULT_AUTHORITY_SEED, mint.key().as_ref()],
+        bump
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = vault_authority
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(mut, token::mint = mint)]
+    pub destination: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+/// Admin withdraw NOC from legacy vault (uses vault-authority PDA without mint suffix)
+/// DEVNET ONLY: No admin check for migration purposes
+#[derive(Accounts)]
+pub struct AdminWithdrawLegacyVault<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    pub mint: Account<'info, Mint>,
+    /// CHECK: Legacy PDA authority (vault-authority without mint)
+    #[account(
+        seeds = [LEGACY_VAULT_AUTHORITY_SEED],
+        bump
+    )]
+    pub legacy_vault_authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = legacy_vault_authority
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(mut, token::mint = mint)]
+    pub destination: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
 #[derive(Accounts)]
 pub struct TransparentDeposit<'info> {
     #[account(mut)]
@@ -436,6 +779,29 @@ pub struct TransparentDeposit<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+/// Accounts for transparent SOL deposit (native SOL, no token program)
+#[derive(Accounts)]
+pub struct TransparentDepositSol<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(mut, seeds = [TREE_SEED], bump)]
+    pub merkle_tree: Account<'info, MerkleTreeAccount>,
+    #[account(seeds = [NULLIFIER_SEED], bump)]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
+    #[account(seeds = [VERIFIER_SEED], bump)]
+    pub verifier: Account<'info, VerifierAccount>,
+    /// CHECK: SOL vault PDA, destination for native SOL
+    #[account(
+        mut,
+        seeds = [SOL_VAULT_SEED],
+        bump,
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -546,8 +912,7 @@ pub struct TransparentWithdrawSol<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(Accounts)
-]
+#[derive(Accounts)]
 pub struct PartialWithdraw<'info> {
     #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
     pub global_state: Account<'info, GlobalState>,
@@ -573,4 +938,178 @@ pub struct PartialWithdraw<'info> {
     )]
     pub vault_authority: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
+}
+
+// ============================================
+// SHIELDED POOL ACCOUNT STRUCTURES
+// ============================================
+
+const SHIELDED_POOL_SEED: &[u8] = b"shielded-pool";
+const SWAP_VERIFIER_SEED: &[u8] = b"swap-verifier";
+
+#[derive(Accounts)]
+pub struct InitializeShieldedPool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init,
+        payer = admin,
+        space = ShieldedPool::LEN + 8,
+        seeds = [SHIELDED_POOL_SEED],
+        bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SeedShieldedPool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump,
+        constraint = shielded_pool.admin == admin.key()
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+}
+
+#[derive(Accounts)]
+pub struct AddPoolLiquidity<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+}
+
+#[derive(Accounts)]
+pub struct SetPoolReserves<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+}
+
+#[derive(Accounts)]
+pub struct ShieldedPoolSwap<'info> {
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+    #[account(mut, seeds = [TREE_SEED], bump)]
+    pub merkle_tree: Account<'info, MerkleTreeAccount>,
+    #[account(mut, seeds = [NULLIFIER_SEED], bump)]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
+    #[account(seeds = [SWAP_VERIFIER_SEED], bump)]
+    pub swap_verifier: Account<'info, VerifierAccount>,
+}
+
+#[derive(Accounts)]
+pub struct GetPoolReserves<'info> {
+    #[account(seeds = [SHIELDED_POOL_SEED], bump = shielded_pool.bump)]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+}
+
+/// Accounts for admin vault initialization
+#[derive(Accounts)]
+pub struct InitTokenVault<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        seeds = [VAULT_TOKEN_SEED, mint.key().as_ref()],
+        bump,
+        token::mint = mint,
+        token::authority = vault_authority
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Derived PDA, used as token authority
+    #[account(
+        seeds = [VAULT_AUTHORITY_SEED, mint.key().as_ref()],
+        bump,
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct SetSwapVerifier<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = VerifierAccount::space(),
+        seeds = [SWAP_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_verifier: Account<'info, VerifierAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitSwapVerifierChunked<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = VerifierAccount::space(),
+        seeds = [SWAP_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_verifier: Account<'info, VerifierAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AppendSwapVerifierChunk<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        mut,
+        seeds = [SWAP_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_verifier: Account<'info, VerifierAccount>,
+}
+
+#[derive(Accounts)]
+pub struct FinalizeSwapVerifier<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        seeds = [SWAP_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_verifier: Account<'info, VerifierAccount>,
 }

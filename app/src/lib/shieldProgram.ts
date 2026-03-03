@@ -21,7 +21,7 @@ import { RandomizedTiming, ANONYMITY_LEVELS, AnonymityConfig } from './anonymity
 // This fee powers the Noctura privacy ecosystem
 export const PRIVACY_FEE_ATOMS = 250_000n; // 0.25 NOC in atoms (6 decimals)
 
-function base64ToBytes(payload: string): Uint8Array {
+export function base64ToBytes(payload: string): Uint8Array {
   if (typeof atob !== 'undefined') {
     const binary = atob(payload);
     const bytes = new Uint8Array(binary.length);
@@ -332,11 +332,14 @@ export async function submitShieldedDeposit(params: {
       isNativeSOL,
     });
 
-    // For native SOL, collect the privacy fee AND transfer SOL in a SINGLE transaction
+    // For native SOL deposits, use the on-chain transparentDepositSol instruction
+    // This instruction will:
+    // 1. Transfer SOL to the vault PDA
+    // 2. Add the commitment to the Merkle tree (critical for later withdrawal!)
     if (isNativeSOL) {
-      console.log('[submitShieldedDeposit] Processing native SOL deposit...');
+      console.log('[submitShieldedDeposit] Processing native SOL deposit via on-chain instruction...');
 
-      // Get NOC token accounts for privacy fee
+      // First, collect the 0.25 NOC privacy fee
       const nocMint = new PublicKey(NOC_TOKEN_MINT);
       const userNocAccount = getAssociatedTokenAddressSync(
         nocMint,
@@ -346,7 +349,6 @@ export async function submitShieldedDeposit(params: {
         ASSOCIATED_TOKEN_PROGRAM_ID,
       );
 
-      // Get fee collector's NOC account
       const program = getProgramForKeypair(keypair);
       const [globalState] = PublicKey.findProgramAddressSync(
         [Buffer.from('global-state')],
@@ -364,19 +366,10 @@ export async function submitShieldedDeposit(params: {
         ASSOCIATED_TOKEN_PROGRAM_ID,
       );
 
-      // The vault for SOL is a system account (PDA), not a token account
-      const [solVaultPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from('sol-vault')],
-        program.programId
-      );
-      console.log('[submitShieldedDeposit] SOL vault PDA:', solVaultPda.toBase58());
-
-      // Combine privacy fee + SOL transfer in ONE transaction
-      console.log('[submitShieldedDeposit] Creating combined transaction: privacy fee + SOL transfer');
-      const tx = new Transaction();
-      
-      // Instruction 1: Transfer 0.25 NOC privacy fee
-      tx.add(
+      // Collect privacy fee first
+      console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee for SOL deposit...');
+      const feeTx = new Transaction();
+      feeTx.add(
         createTransferInstruction(
           userNocAccount,
           feeCollectorNocAccount,
@@ -386,27 +379,67 @@ export async function submitShieldedDeposit(params: {
           TOKEN_PROGRAM_ID,
         )
       );
-      
-      // Instruction 2: Transfer SOL to vault
-      tx.add(
-        SystemProgram.transfer({
-          fromPubkey: keypair.publicKey,
-          toPubkey: solVaultPda,
-          lamports: Number(prepared.note.amount),
-        })
-      );
+      await sendAndConfirmTransaction(connection, feeTx, [keypair]);
+      console.log('[submitShieldedDeposit] ✅ Privacy fee collected');
 
-      solDepositSig = await sendAndConfirmTransaction(connection, tx, [keypair]);
-      console.log('[submitShieldedDeposit] ✅ Combined transaction confirmed (privacy fee + SOL deposit):', solDepositSig);
-      // Wait for confirmation
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Derive PDAs for the on-chain instruction
+      const [merkleTree] = PublicKey.findProgramAddressSync(
+        [Buffer.from('merkle-tree')],
+        program.programId
+      );
+      const [nullifierSet] = PublicKey.findProgramAddressSync(
+        [Buffer.from('nullifiers')],
+        program.programId
+      );
+      const [verifier] = PublicKey.findProgramAddressSync(
+        [Buffer.from('verifier')],
+        program.programId
+      );
+      const [solVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from('sol-vault')],
+        program.programId
+      );
+      console.log('[submitShieldedDeposit] SOL vault PDA:', solVaultPda.toBase58());
+
+      // Get current leaf index
+      const treeAccount = await program.account.merkleTreeAccount.fetch(merkleTree);
+      const leafIndex = Number(treeAccount.currentIndex);
+
+      // Prepare proof data
+      const proofBytes = base64ToBytes(proof.proofBytes);
+      const publicInputs = proof.publicInputs.map((entry) => Array.from(base64ToBytes(entry)) as [number, ...number[]]);
+
+      const commitment = bigIntToBytesLE(BigInt(prepared.note.commitment));
+      const nullifier = bigIntToBytesLE(BigInt(prepared.note.nullifier));
+      const amount = new BN(prepared.note.amount.toString());
+
+      console.log('[submitShieldedDeposit] Calling transparentDepositSol instruction...');
+
+      // Call the on-chain instruction (transfers SOL and adds commitment to Merkle tree)
+      const signature = await program.methods
+        .transparentDepositSol(commitment, nullifier, amount, Buffer.from(proofBytes), publicInputs)
+        .accounts({
+          payer: keypair.publicKey,
+          globalState,
+          merkleTree,
+          nullifierSet,
+          verifier,
+          solVault: solVaultPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log('[submitShieldedDeposit] ✅ Native SOL deposit complete:', signature);
+      return { signature, leafIndex };
     }
 
-    // Use NOC_TOKEN_MINT for deriving PDAs (shared infrastructure for all deposits)
+    // For NOC deposits, continue with the existing flow below
+    console.log('[submitShieldedDeposit] Processing NOC deposit...');
+
+    // Use NOC_TOKEN_MINT for deriving PDAs
     const pdaMint = new PublicKey(NOC_TOKEN_MINT);
     const program = getProgramForKeypair(keypair);
     const pdas = deriveShieldPdas(pdaMint);
-
     
     console.log('[submitShieldedDeposit] PDAs derived:', {
       globalState: pdas.globalState.toBase58(),
@@ -421,35 +454,6 @@ export async function submitShieldedDeposit(params: {
     ]);
     const leafIndex = Number(treeAccount.currentIndex);
     console.log('[submitShieldedDeposit] Fetched tree and global state, leafIndex:', leafIndex);
-    
-    // Disable on-chain shield/priority fees if they are non-zero (only client-side 0.25 NOC fee should apply)
-    const shieldFeeBps: number = (globalStateAccount as any).shieldFeeBps ?? 0;
-    const priorityFeeBps: number = (globalStateAccount as any).priorityFeeBps ?? 0;
-
-    if (shieldFeeBps !== 0 || priorityFeeBps !== 0) {
-      console.log('[submitShieldedDeposit] On-chain fees are non-zero, disabling to ensure only 0.25 NOC privacy fee is charged...');
-      try {
-        await program.methods
-          .setFee(0, 0)
-          .accounts({
-            admin: keypair.publicKey,
-            globalState: pdas.globalState,
-          })
-          .rpc();
-        console.log('[submitShieldedDeposit] ✅ On-chain fees disabled (set to 0 bps)');
-      } catch (feeErr) {
-        console.warn('[submitShieldedDeposit] ⚠️ Failed to disable on-chain fees (continuing with deposit):', (feeErr as Error).message);
-      }
-    }
-
-    // For native SOL, we already transferred the funds and collected fee
-    if (isNativeSOL) {
-      console.log('[submitShieldedDeposit] ✅ Native SOL deposit complete (fee collected, no token program needed)');
-      if (!solDepositSig) {
-        throw new Error('SOL deposit signature is missing');
-      }
-      return { signature: solDepositSig, leafIndex };
-    }
     
     // For NOC deposits, use the provided mint or default to NOC_TOKEN_MINT
     const nocMint = mint || pdaMint;
@@ -609,16 +613,6 @@ export async function submitShieldedWithdraw(params: {
   const program = getProgramForKeypair(keypair);
   const pdas = deriveShieldPdas(mint);
   
-  // Collect 0.25 NOC privacy fee for withdrawal
-  console.log('[submitShieldedWithdraw] Collecting 0.25 NOC privacy fee for withdrawal...');
-  try {
-    const feeSig = await collectPrivacyFee(keypair);
-    console.log('[submitShieldedWithdraw] ✅ Privacy fee collected, signature:', feeSig);
-  } catch (feeErr) {
-    console.error('[submitShieldedWithdraw] ❌ CRITICAL: Privacy fee collection failed:', feeErr);
-    throw new Error(`Privacy fee collection failed: ${(feeErr as Error).message}`);
-  }
-  
   // Check if target ATA exists, create if needed
   const ataInfo = await connection.getAccountInfo(targetAta);
   if (!ataInfo) {
@@ -676,6 +670,18 @@ export async function submitShieldedWithdraw(params: {
   tx.sign(keypair);
   const signature = await connection.sendRawTransaction(tx.serialize());
   await connection.confirmTransaction(signature, 'confirmed');
+
+  // Collect 0.25 NOC privacy fee AFTER withdrawal (using freshly-withdrawn tokens)
+  // This way the fee comes from the shielded balance (via the withdrawn amount)
+  console.log('[submitShieldedWithdraw] Collecting 0.25 NOC privacy fee from withdrawn tokens...');
+  try {
+    const feeSig = await collectPrivacyFee(keypair);
+    console.log('[submitShieldedWithdraw] ✅ Privacy fee collected, signature:', feeSig);
+  } catch (feeErr) {
+    // Fee collection failed - log but don't fail the entire withdrawal
+    // The withdrawal already succeeded, we'll collect the fee on the next operation
+    console.warn('[submitShieldedWithdraw] ⚠️ Privacy fee collection failed (withdrawal succeeded):', feeErr);
+  }
 
   return signature;
 }
@@ -868,7 +874,7 @@ export async function submitShieldedTransfer(params: {
 
 /**
  * Fetch spent nullifiers from on-chain state.
- * Returns an array of nullifier hashes (as hex strings) that have been spent.
+ * Returns an array of nullifier hashes (as decimal strings) that have been spent.
  */
 export async function fetchSpentNullifiers(keypair: Keypair): Promise<string[]> {
   const program = getProgramForKeypair(keypair);
@@ -878,15 +884,30 @@ export async function fetchSpentNullifiers(keypair: Keypair): Promise<string[]> 
     const nullifierSetAccount = await program.account.nullifierSetAccount.fetch(pdas.nullifierSet);
     const nullifiers = (nullifierSetAccount as { nullifiers: number[][] }).nullifiers;
     
-    // Convert each nullifier (32-byte array) to a hex string for comparison
-    return nullifiers.map((nullifier: number[]) => {
-      // Convert byte array to bigint (little-endian) then to string
+    // Debug: Log the raw format
+    if (nullifiers.length > 0) {
+      console.log('[fetchSpentNullifiers] Raw first nullifier bytes:', nullifiers[0].slice(0, 8), '...', nullifiers[0].slice(-4));
+    }
+    
+    // Convert each nullifier (32-byte array) to bigint string
+    // On-chain stores as little-endian (first byte = LSB)
+    const result = nullifiers.map((nullifier: number[]) => {
+      // Little-endian: byte[0] is LSB, byte[31] is MSB
       let value = 0n;
-      for (let i = nullifier.length - 1; i >= 0; i--) {
-        value = (value << 8n) | BigInt(nullifier[i]);
+      for (let i = 0; i < nullifier.length; i++) {
+        value |= BigInt(nullifier[i]) << BigInt(i * 8);
       }
       return value.toString();
     });
+    
+    // Log sample on-chain nullifiers for debugging
+    if (result.length > 0) {
+      console.log('[fetchSpentNullifiers] Total on-chain spent nullifiers:', result.length);
+      console.log('[fetchSpentNullifiers] Sample nullifiers (first 3, truncated):', 
+        result.slice(0, 3).map(n => `${n.slice(0, 25)}...${n.slice(-10)}`));
+    }
+    
+    return result;
   } catch (err) {
     console.error('Failed to fetch nullifiers:', err);
     return [];

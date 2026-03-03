@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 
 const RELAYER_URL = process.env.RELAYER_URL || 'http://localhost:8787';
-const NOC_MINT = '2aFVaSy29RZ5V7D6cPBf59sVwJB34nETF6piwjT7AYUb';
+const NOC_MINT = 'FAPAn9p8guXxrCqqNXsxX8qLSzLFqmKojeejobsh3sPg';
 
 function randomHex(bits = 256) {
   const bytes = crypto.randomBytes(bits / 8);

@@ -12,7 +12,7 @@ import { ShieldedNoteRecord } from '../types/shield';
 const FIELD_MODULUS = BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
 const NOC_DECIMALS = 6;
 
-function randomScalar(): bigint {
+export function randomScalar(): bigint {
   if (!globalThis.crypto || typeof globalThis.crypto.getRandomValues !== 'function') {
     throw new Error('Secure randomness unavailable in this environment');
   }
@@ -146,8 +146,11 @@ export function isNoteCorrupted(note: ShieldedNoteRecord): boolean {
   if (!note.tokenMintField) return true; // Missing field = corrupted
   
   if (note.tokenType === 'SOL') {
-    // SOL notes should have simple constant '1'
-    const isCorrect = note.tokenMintField === EXPECTED_SOL_TOKEN_MINT_FIELD;
+    // SOL notes: Accept both '1' (new format) and the NOC tokenMintField (legacy deposits)
+    // Legacy SOL deposits may have used NOC_TOKEN_MINT before the fix
+    const isNewFormat = note.tokenMintField === EXPECTED_SOL_TOKEN_MINT_FIELD;
+    const isLegacyFormat = note.tokenMintField === EXPECTED_NOC_TOKEN_MINT_FIELD;
+    const isCorrect = isNewFormat || isLegacyFormat;
     if (!isCorrect) {
       console.warn(`[isNoteCorrupted] SOL note has wrong tokenMintField:`, {
         nullifier: note.nullifier.slice(0, 16),
