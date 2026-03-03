@@ -105,9 +105,32 @@ export async function executeShieldedSwap(
     const amountAtoms = BigInt(Math.floor(parseFloat(amount) * Math.pow(10, inputDecimals)));
     
     // Check if shielded pool is available for TRUE private swap
-    const useShieldedPool = await shouldUseShieldedPool();
+    let useShieldedPool = await shouldUseShieldedPool();
     
+    // For TRUE PRIVATE swap, we need an exact-match note (circuit doesn't support change)
+    let exactMatchNote: typeof shieldedNotes[0] | undefined;
     if (useShieldedPool) {
+      const relevantNotes = shieldedNotes.filter(n => 
+        !n.spent && 
+        n.owner === walletAddress && 
+        n.tokenType === fromToken
+      );
+      
+      // Find a note that exactly matches (within 1% tolerance)
+      exactMatchNote = relevantNotes.find(n => {
+        const noteAmount = BigInt(n.amount);
+        const diff = noteAmount > amountAtoms ? noteAmount - amountAtoms : amountAtoms - noteAmount;
+        const tolerance = amountAtoms / 100n; // 1% tolerance
+        return diff <= tolerance;
+      });
+      
+      if (!exactMatchNote) {
+        console.log('[ShieldedSwap] No exact-match note found, falling back to relayer mode for proper change handling');
+        useShieldedPool = false; // Fall back to withdraw→swap→redeposit
+      }
+    }
+    
+    if (useShieldedPool && exactMatchNote) {
       console.log('[ShieldedSwap] 🔒 Using TRUE PRIVATE mode (shielded pool)');
       onStatusUpdate('🔒 TRUE PRIVATE swap mode - tokens stay shielded');
       
@@ -115,25 +138,11 @@ export async function executeShieldedSwap(
       // TRUE PRIVATE SWAP - No tokens leave shielded system!
       // ============================================
       
-      // Step 1: Select input note
-      onStatusUpdate('Selecting shielded note...');
-      const relevantNotes = shieldedNotes.filter(n => 
-        !n.spent && 
-        n.owner === walletAddress && 
-        n.tokenType === fromToken
-      );
+      const inputNote = exactMatchNote;
+      onStatusUpdate('Using exact-match shielded note...');
 
-      if (relevantNotes.length === 0) {
-        throw new Error(`No shielded ${fromToken} notes available`);
-      }
-
-      // Sort by amount descending, find a note that covers the amount
-      relevantNotes.sort((a, b) => Number(BigInt(b.amount) - BigInt(a.amount)));
-      const inputNote = relevantNotes.find(n => BigInt(n.amount) >= amountAtoms);
-      
-      if (!inputNote) {
-        throw new Error(`No single note covers ${amount} ${fromToken}. Consolidate notes first.`);
-      }
+      // Use the exact note amount for the swap (ensures no dust)
+      const exactInputAmount = BigInt(inputNote.amount);
 
       // Step 2: Get pool reserves and calculate output
       onStatusUpdate('Calculating swap output...');
@@ -143,12 +152,13 @@ export async function executeShieldedSwap(
       }
 
       const inputIsNoc = fromToken === 'NOC';
-      const outputAmount = calculateSwapOutput(amountAtoms, inputIsNoc, reserves);
+      // Use exact note amount for calculation
+      const outputAmount = calculateSwapOutput(exactInputAmount, inputIsNoc, reserves);
       const minOutputAmount = outputAmount * BigInt(10000 - slippageBps) / 10000n;
 
       const outputDecimals = toToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS;
       console.log('[ShieldedSwap] Pool quote:', {
-        input: amountAtoms.toString(),
+        input: exactInputAmount.toString(),
         output: outputAmount.toString(),
         minOutput: minOutputAmount.toString(),
       });
@@ -239,7 +249,7 @@ export async function executeShieldedSwap(
 
       const swapSignature = await executeShieldedPoolSwap(
         keypair,
-        amountAtoms,
+        exactInputAmount,
         minOutputAmount,
         inputIsNoc,
         inputNullifier,
@@ -258,7 +268,7 @@ export async function executeShieldedSwap(
       });
       addShieldedNote(outputNoteRecord);
 
-      const inputFormatted = (Number(amountAtoms) / Math.pow(10, inputDecimals)).toFixed(inputDecimals === 9 ? 4 : 2);
+      const inputFormatted = (Number(exactInputAmount) / Math.pow(10, inputDecimals)).toFixed(inputDecimals === 9 ? 4 : 2);
       const outputFormatted = (Number(outputAmount) / Math.pow(10, outputDecimals)).toFixed(outputDecimals === 9 ? 4 : 2);
 
       onStatusUpdate(`✅ TRUE PRIVATE swap complete! ${inputFormatted} ${fromToken} → ${outputFormatted} ${toToken}`);
