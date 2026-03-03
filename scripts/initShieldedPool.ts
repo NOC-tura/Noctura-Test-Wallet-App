@@ -15,10 +15,10 @@ const PROGRAM_ID = new PublicKey('3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz')
 // Pool configuration
 const SWAP_FEE_BPS = 30; // 0.3% fee
 
-// Initial liquidity (can be adjusted based on vault balances)
-// These represent the "virtual" pool reserves backed by actual vault holdings
+// Initial liquidity - matching market rate (~283 NOC per SOL)
+// SOL price: $85, NOC price: $0.30 → 283 NOC per SOL
 const INITIAL_SOL_AMOUNT = 10 * LAMPORTS_PER_SOL; // 10 SOL
-const INITIAL_NOC_AMOUNT = 10000 * 1_000_000;     // 10,000 NOC (6 decimals)
+const INITIAL_NOC_AMOUNT = 2833 * 1_000_000;      // 2833 NOC (6 decimals) = ~283 NOC per SOL
 
 async function loadKeypair(): Promise<Keypair> {
   const keypairPath = process.env.SOLANA_KEYPAIR || process.env.HOME + '/config/solana/id.json';

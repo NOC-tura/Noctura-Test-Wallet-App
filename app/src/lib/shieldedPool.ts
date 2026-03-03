@@ -261,23 +261,29 @@ export async function isShieldedPoolAvailable(): Promise<boolean> {
 }
 
 /**
- * For now, if shielded pool is not available or proof is not ready,
- * fall back to the withdraw→swap→deposit flow
- * 
- * TEMPORARILY DISABLED: Pool AMM has imbalanced reserves causing bad rates
- * TODO: Re-enable once pool is properly balanced (~283 NOC/SOL)
+ * Check if we should use the on-chain shielded pool for TRUE private swaps.
+ * Returns true if pool is available, has good rates, and swap verifier is set.
  */
 export async function shouldUseShieldedPool(): Promise<boolean> {
-  // TEMPORARILY DISABLED - pool has bad exchange rate
-  // Pool ratio is ~9000 NOC/SOL but market is ~283 NOC/SOL
-  console.log('[ShieldedPool] Pool AMM disabled - using relayer fallback for better rates');
-  return false;
-  
   // Check if pool exists and has liquidity
   const poolAvailable = await isShieldedPoolAvailable();
   if (!poolAvailable) {
     console.log('[ShieldedPool] Pool not available, using fallback');
     return false;
+  }
+
+  // Check pool rate is within acceptable range of market rate (283 NOC/SOL)
+  const reserves = await getPoolReserves();
+  if (reserves) {
+    const poolRatio = Number(reserves.nocReserve) / Number(reserves.solReserve) * 1000; // NOC per 1 SOL
+    const marketRatio = 283;
+    const deviation = Math.abs(poolRatio - marketRatio) / marketRatio;
+    
+    if (deviation > 0.10) { // More than 10% off market rate
+      console.log('[ShieldedPool] Pool rate', poolRatio.toFixed(0), 'NOC/SOL deviates', (deviation * 100).toFixed(1), '% from market', marketRatio, '- using fallback');
+      return false;
+    }
+    console.log('[ShieldedPool] Pool rate', poolRatio.toFixed(0), 'NOC/SOL is within', (deviation * 100).toFixed(1), '% of market');
   }
 
   // Check if swap verifier is set up
@@ -290,6 +296,7 @@ export async function shouldUseShieldedPool(): Promise<boolean> {
       console.log('[ShieldedPool] Swap verifier not set, using fallback');
       return false;
     }
+    console.log('[ShieldedPool] ✅ Using TRUE private swap mode');
     return true;
   } catch {
     return false;
