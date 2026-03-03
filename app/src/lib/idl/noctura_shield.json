@@ -1247,6 +1247,74 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "transparentPoolSwap",
+      "docs": [
+        "Execute a transparent swap using the on-chain pool",
+        "Tokens are transferred on-chain, no ZK proofs needed"
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "shieldedPool",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "solVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "nocMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "userNocAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "inputAmount",
+          "type": "u64"
+        },
+        {
+          "name": "minOutputAmount",
+          "type": "u64"
+        },
+        {
+          "name": "inputIsSol",
+          "type": "bool"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -1546,6 +1614,31 @@
           "index": false
         }
       ]
+    },
+    {
+      "name": "TransparentSwapExecuted",
+      "fields": [
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "isSolToNoc",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "inputAmount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "outputAmount",
+          "type": "u64",
+          "index": false
+        }
+      ]
     }
   ],
   "errors": [
@@ -1589,5 +1682,8 @@
       "name": "InvalidVerifierKey",
       "msg": "Verifier parameters are malformed"
     }
-  ]
+  ],
+  "metadata": {
+    "address": "3KN2qrmEtPyk9WGu9jJSzLerxU8AUXAy8Dp6bqw5APDz"
+  }
 }

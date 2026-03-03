@@ -601,6 +601,101 @@ pub mod noctura_shield {
             pool.sol_reserve, pool.noc_reserve, pool.swap_fee_bps);
         Ok(())
     }
+
+    /// Execute a transparent swap using the on-chain pool
+    /// Tokens are transferred on-chain, no ZK proofs needed
+    pub fn transparent_pool_swap(
+        ctx: Context<TransparentPoolSwap>,
+        input_amount: u64,
+        min_output_amount: u64,
+        input_is_sol: bool, // true = SOL->NOC, false = NOC->SOL
+    ) -> Result<()> {
+        require!(input_amount > 0, ShieldError::InvalidAmount);
+
+        let pool = &mut ctx.accounts.shielded_pool;
+        require!(pool.enabled, ShieldError::InvalidAmount);
+
+        // Calculate output using AMM formula (same as shielded)
+        let output_amount = pool.calculate_output(input_amount, input_is_sol)
+            .ok_or(error!(ShieldError::InvalidAmount))?;
+
+        // Slippage check
+        require!(output_amount >= min_output_amount, ShieldError::InvalidAmount);
+
+        if input_is_sol {
+            // User sends SOL, receives NOC
+            // Transfer SOL from user to sol_vault
+            let cpi_ctx = CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: ctx.accounts.sol_vault.to_account_info(),
+                },
+            );
+            anchor_lang::system_program::transfer(cpi_ctx, input_amount)?;
+
+            // Transfer NOC from vault to user
+            let mint_key = ctx.accounts.noc_mint.key();
+            let vault_bump = ctx.bumps.vault_authority;
+            let seeds = &[VAULT_AUTHORITY_SEED, mint_key.as_ref(), &[vault_bump]];
+            let signer_seeds = &[&seeds[..]];
+
+            let transfer_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    from: ctx.accounts.vault_token_account.to_account_info(),
+                    to: ctx.accounts.user_noc_account.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                signer_seeds,
+            );
+            anchor_spl::token::transfer(transfer_ctx, output_amount)?;
+
+            // Update reserves
+            pool.sol_reserve = pool.sol_reserve.checked_add(input_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.noc_reserve = pool.noc_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        } else {
+            // User sends NOC, receives SOL
+            // Transfer NOC from user to vault
+            let transfer_ctx = CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    from: ctx.accounts.user_noc_account.to_account_info(),
+                    to: ctx.accounts.vault_token_account.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+            );
+            anchor_spl::token::transfer(transfer_ctx, input_amount)?;
+
+            // Transfer SOL from sol_vault to user (direct lamport manipulation)
+            **ctx.accounts.sol_vault.to_account_info().try_borrow_mut_lamports()? -= output_amount;
+            **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += output_amount;
+
+            // Update reserves
+            pool.noc_reserve = pool.noc_reserve.checked_add(input_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.sol_reserve = pool.sol_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        }
+
+        emit!(TransparentSwapExecuted {
+            user: ctx.accounts.user.key(),
+            is_sol_to_noc: input_is_sol,
+            input_amount,
+            output_amount,
+        });
+
+        msg!("Transparent swap: {} {} -> {} {}", 
+            input_amount, 
+            if input_is_sol { "SOL" } else { "NOC" },
+            output_amount,
+            if input_is_sol { "NOC" } else { "SOL" }
+        );
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -1023,6 +1118,43 @@ pub struct ShieldedPoolSwap<'info> {
 pub struct GetPoolReserves<'info> {
     #[account(seeds = [SHIELDED_POOL_SEED], bump = shielded_pool.bump)]
     pub shielded_pool: Account<'info, ShieldedPool>,
+}
+
+/// Accounts for transparent (non-shielded) pool swap
+#[derive(Accounts)]
+pub struct TransparentPoolSwap<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+    /// CHECK: SOL vault PDA
+    #[account(
+        mut,
+        seeds = [SOL_VAULT_SEED],
+        bump,
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+    pub noc_mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [VAULT_TOKEN_SEED, noc_mint.key().as_ref()],
+        bump,
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Vault authority PDA
+    #[account(
+        seeds = [VAULT_AUTHORITY_SEED, noc_mint.key().as_ref()],
+        bump,
+    )]
+    pub vault_authority: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub user_noc_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Accounts for admin vault initialization

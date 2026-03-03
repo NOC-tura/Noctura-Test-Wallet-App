@@ -33,3 +33,11 @@ pub struct ShieldedSwapExecuted {
     pub input_amount: u64,
     pub output_amount: u64,
 }
+
+#[event]
+pub struct TransparentSwapExecuted {
+    pub user: Pubkey,
+    pub is_sol_to_noc: bool,
+    pub input_amount: u64,
+    pub output_amount: u64,
+}

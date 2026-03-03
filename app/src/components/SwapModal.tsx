@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getSwapQuote, formatQuoteForDisplay } from '../lib/relayerSwap';
+import { getOnChainSwapQuote } from '../lib/onChainSwap';
 
 interface SwapModalProps {
   isOpen: boolean;
@@ -87,23 +87,22 @@ export function SwapModal({
 
       setFetchingQuote(true);
       try {
-        // Get quote from Noctura relayer
-        const relayerQuote = await getSwapQuote(fromToken, amount, Math.round(slippage * 100));
+        // Get quote from on-chain pool
+        const poolQuote = await getOnChainSwapQuote(fromToken, amount, Math.round(slippage * 100));
         
-        if (relayerQuote) {
-          const formatted = formatQuoteForDisplay(relayerQuote);
+        if (poolQuote) {
           setQuote({
             inputAmount: amount,
-            outputAmount: formatted.outputAmount,
-            priceImpact: formatted.priceImpact,
-            fee: relayerQuote.fee,
-            route: 'Noctura',
+            outputAmount: poolQuote.outputAmount.toFixed(poolQuote.outputToken === 'SOL' ? 6 : 2),
+            priceImpact: poolQuote.priceImpact,
+            fee: poolQuote.fee,
+            route: 'On-chain Pool',
           });
         } else {
-          // Fallback to estimate if relayer unavailable
+          // Fallback to estimate if pool unavailable
           const inputAmount = parseFloat(amount);
-          const rate = fromToken === 'SOL' ? 273 : 1 / 273;
-          const feePercent = 0.12;
+          const rate = fromToken === 'SOL' ? 283 : 1 / 283;
+          const feePercent = 0.3;
           const outputAmount = inputAmount * rate * (1 - feePercent / 100);
           
           setQuote({
@@ -111,7 +110,7 @@ export function SwapModal({
             outputAmount: outputAmount.toFixed(fromToken === 'SOL' ? 2 : 6),
             priceImpact: 0,
             fee: inputAmount * rate * (feePercent / 100),
-            route: 'Noctura',
+            route: 'On-chain Pool (estimate)',
           });
         }
       } catch (err) {

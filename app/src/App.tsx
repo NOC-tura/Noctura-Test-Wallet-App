@@ -42,7 +42,8 @@ import { getObfuscatedFeeCollector } from './lib/feeObfuscation';
 import { getTimingPrivacyManager } from './lib/timingPrivacy';
 import { getAccountAnonymityManager } from './lib/accountAnonymity';
 import { buildConsolidationWitness, partitionNotesForConsolidation } from './lib/consolidate';
-import { getSwapQuote, executeSwap, formatQuoteForDisplay } from './lib/relayerSwap';
+import { getSwapQuote, formatQuoteForDisplay } from './lib/relayerSwap';
+import { getOnChainSwapQuote, executeOnChainSwap } from './lib/onChainSwap';
 import { executeShieldedSwap, canExecuteShieldedSwap } from './lib/shieldedSwap';
 import type { SwapParams } from './components/SwapModal';
 
@@ -1852,37 +1853,36 @@ export default function App() {
         
       } else {
         // ============================================
-        // TRANSPARENT SWAP: Direct relayer swap
+        // TRANSPARENT SWAP: On-chain pool swap (fully decentralized!)
         // ============================================
-        console.log('[handleSwap] Using TRANSPARENT swap path');
+        console.log('[handleSwap] Using TRANSPARENT on-chain swap path');
         
-        setSwapStatusMessage('Getting swap quote from Noctura...');
+        setSwapStatusMessage('Getting quote from on-chain pool...');
         
-        const quote = await getSwapQuote(fromToken, amount, Math.round(slippage * 100));
+        const quote = await getOnChainSwapQuote(fromToken, amount, Math.round(slippage * 100));
         if (!quote) {
-          throw new Error('Failed to get swap quote from Noctura');
+          throw new Error('Failed to get quote from on-chain pool');
         }
 
-        setSwapStatusMessage('Executing swap via Noctura...');
+        setSwapStatusMessage('Executing swap on-chain...');
 
-        const result = await executeSwap(quote, keypair);
+        const result = await executeOnChainSwap(quote, keypair);
 
         if (!result.success) {
-          throw new Error(result.error || 'Swap failed');
+          throw new Error(result.error || 'On-chain swap failed');
         }
 
-        const formattedQuote = formatQuoteForDisplay(quote);
-        setStatus(`✅ Swapped ${amount} ${fromToken} → ${formattedQuote.outputAmount} ${toToken}`);
+        setStatus(`✅ Swapped ${amount} ${fromToken} → ${result.outputAmount} ${toToken} (on-chain)`);
         
         // Record transparent swap in transaction history
         addTransaction({
           type: 'swap',
           status: 'success',
           signature: result.signature || `swap-${Date.now()}`,
-          amount: `${amount} → ${formattedQuote.outputAmount}`,
+          amount: `${amount} → ${result.outputAmount}`,
           token: `${fromToken}/${toToken}`,
           from: keypair.publicKey.toBase58().slice(0, 8) + '...',
-          to: 'Relayer',
+          to: 'On-chain Pool',
           isShielded: false,
           walletAddress: keypair.publicKey.toBase58(),
         });
