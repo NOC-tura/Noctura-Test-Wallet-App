@@ -157,7 +157,8 @@ export function SwapModal({
 
   // Validation
   const parsedAmount = parseFloat(amount) || 0;
-  const insufficientBalance = parsedAmount > fromBalance;
+  // Don't show insufficient balance warning while swap is in progress (balance changes during swap)
+  const insufficientBalance = !isLoading && parsedAmount > fromBalance;
   const isSwapDisabled = 
     !amount || 
     parsedAmount <= 0 || 

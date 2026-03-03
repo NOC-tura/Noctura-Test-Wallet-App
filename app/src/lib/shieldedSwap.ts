@@ -457,7 +457,7 @@ export async function executeShieldedSwap(
       const changeDepositWitness = serializeDepositWitness({ note: changeDeposit.note });
       const changeDepositProof = await proveCircuit('deposit', changeDepositWitness);
 
-      // Submit change deposit
+      // Submit change deposit (skip fee - already included in swap cost)
       const changeMint = fromToken === 'SOL' ? undefined : new PublicKey(NOC_TOKEN_MINT);
       const changeDepositResult = await submitShieldedDeposit({
         keypair,
@@ -465,6 +465,7 @@ export async function executeShieldedSwap(
         proof: changeDepositProof,
         mint: changeMint,
         tokenType: fromToken,
+        skipFee: true,  // Skip privacy fee for swap re-deposits
       });
 
       console.log('[ShieldedSwap] ✅ Change deposit complete:', changeDepositResult.signature);
@@ -494,7 +495,7 @@ export async function executeShieldedSwap(
     const depositWitness = serializeDepositWitness({ note: deposit.note });
     const depositProof = await proveCircuit('deposit', depositWitness);
 
-    // Submit deposit
+    // Submit deposit (skip fee - already included in swap cost)
     const depositMint = toToken === 'SOL' ? undefined : new PublicKey(NOC_TOKEN_MINT);
     const depositResult = await submitShieldedDeposit({
       keypair,
@@ -502,6 +503,7 @@ export async function executeShieldedSwap(
       proof: depositProof,
       mint: depositMint,
       tokenType: toToken,
+      skipFee: true,  // Skip privacy fee for swap re-deposits
     });
 
     console.log('[ShieldedSwap] ✅ Deposit complete:', depositResult.signature);

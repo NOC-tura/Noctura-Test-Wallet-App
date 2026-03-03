@@ -312,9 +312,10 @@ export async function submitShieldedDeposit(params: {
   priorityLane?: boolean;
   mint?: PublicKey;  // Optional mint, defaults to NOC
   tokenType?: 'SOL' | 'NOC';  // Token type for logging
+  skipFee?: boolean;  // Skip privacy fee (for swap re-deposits)
 }) {
   try {
-    const { keypair, prepared, proof, priorityLane = false, mint: mintParam, tokenType = 'NOC' } = params;
+    const { keypair, prepared, proof, priorityLane = false, mint: mintParam, tokenType = 'NOC', skipFee = false } = params;
     if (prepared.note.amount <= 0n) {
       throw new Error('Prepared deposit amount must be greater than zero');
     }
@@ -366,21 +367,25 @@ export async function submitShieldedDeposit(params: {
         ASSOCIATED_TOKEN_PROGRAM_ID,
       );
 
-      // Collect privacy fee first
-      console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee for SOL deposit...');
-      const feeTx = new Transaction();
-      feeTx.add(
-        createTransferInstruction(
-          userNocAccount,
-          feeCollectorNocAccount,
-          keypair.publicKey,
-          Number(PRIVACY_FEE_ATOMS),
-          [],
-          TOKEN_PROGRAM_ID,
-        )
-      );
-      await sendAndConfirmTransaction(connection, feeTx, [keypair]);
-      console.log('[submitShieldedDeposit] ✅ Privacy fee collected');
+      // Collect privacy fee first (unless skipped for swap re-deposits)
+      if (!skipFee) {
+        console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee for SOL deposit...');
+        const feeTx = new Transaction();
+        feeTx.add(
+          createTransferInstruction(
+            userNocAccount,
+            feeCollectorNocAccount,
+            keypair.publicKey,
+            Number(PRIVACY_FEE_ATOMS),
+            [],
+            TOKEN_PROGRAM_ID,
+          )
+        );
+        await sendAndConfirmTransaction(connection, feeTx, [keypair]);
+        console.log('[submitShieldedDeposit] ✅ Privacy fee collected');
+      } else {
+        console.log('[submitShieldedDeposit] Skipping privacy fee (swap re-deposit)');
+      }
 
       // Derive PDAs for the on-chain instruction
       const [merkleTree] = PublicKey.findProgramAddressSync(
@@ -458,14 +463,18 @@ export async function submitShieldedDeposit(params: {
     // For NOC deposits, use the provided mint or default to NOC_TOKEN_MINT
     const nocMint = mint || pdaMint;
 
-    // Collect 0.25 NOC privacy fee for deposit (same fee for all shielded transactions)
-    console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee...');
-    try {
-      const feeSig = await collectPrivacyFee(keypair);
-      console.log('[submitShieldedDeposit] ✅ Privacy fee collected, signature:', feeSig);
-    } catch (feeErr) {
-      console.error('[submitShieldedDeposit] ❌ CRITICAL: Privacy fee collection failed:', feeErr);
-      throw new Error(`Privacy fee collection failed: ${(feeErr as Error).message}`);
+    // Collect 0.25 NOC privacy fee for deposit (unless skipped for swap re-deposits)
+    if (!skipFee) {
+      console.log('[submitShieldedDeposit] Collecting 0.25 NOC privacy fee...');
+      try {
+        const feeSig = await collectPrivacyFee(keypair);
+        console.log('[submitShieldedDeposit] ✅ Privacy fee collected, signature:', feeSig);
+      } catch (feeErr) {
+        console.error('[submitShieldedDeposit] ❌ CRITICAL: Privacy fee collection failed:', feeErr);
+        throw new Error(`Privacy fee collection failed: ${(feeErr as Error).message}`);
+      }
+    } else {
+      console.log('[submitShieldedDeposit] Skipping privacy fee (swap re-deposit)');
     }
 
     const userTokenAccount = await ensureAta(keypair, nocMint);
