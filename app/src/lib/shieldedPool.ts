@@ -263,8 +263,16 @@ export async function isShieldedPoolAvailable(): Promise<boolean> {
 /**
  * For now, if shielded pool is not available or proof is not ready,
  * fall back to the withdraw→swap→deposit flow
+ * 
+ * TEMPORARILY DISABLED: Pool AMM has imbalanced reserves causing bad rates
+ * TODO: Re-enable once pool is properly balanced (~283 NOC/SOL)
  */
 export async function shouldUseShieldedPool(): Promise<boolean> {
+  // TEMPORARILY DISABLED - pool has bad exchange rate
+  // Pool ratio is ~9000 NOC/SOL but market is ~283 NOC/SOL
+  console.log('[ShieldedPool] Pool AMM disabled - using relayer fallback for better rates');
+  return false;
+  
   // Check if pool exists and has liquidity
   const poolAvailable = await isShieldedPoolAvailable();
   if (!poolAvailable) {
