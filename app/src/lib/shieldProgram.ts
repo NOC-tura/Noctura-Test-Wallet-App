@@ -13,7 +13,7 @@ import { connection } from './solana';
 import { getProgramForKeypair, deriveShieldPdas } from './anchorClient';
 import { PreparedDeposit } from './shield';
 import { ProverResponse } from './prover';
-import { NOC_TOKEN_MINT } from './constants';
+import { NOC_TOKEN_MINT, RELAYER_ENDPOINTS } from './constants';
 import { RandomizedTiming, ANONYMITY_LEVELS, AnonymityConfig } from './anonymityUtils';
 
 // Privacy fee: ONLY 0.25 NOC for ALL shielded transactions (deposits, withdrawals, transfers)
@@ -1157,7 +1157,7 @@ export async function relayTransfer(params: {
   
   try {
     // Call relayer endpoint to submit the transfer
-    const response = await fetch('http://localhost:8787/relay/transfer', {
+    const response = await fetch(`${RELAYER_ENDPOINTS[0]}/relay/transfer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1194,7 +1194,7 @@ export async function relayWithdraw(params: {
   
   try {
     // Call relayer endpoint to submit the withdrawal
-    const response = await fetch('http://localhost:8787/relay/withdraw', {
+    const response = await fetch(`${RELAYER_ENDPOINTS[0]}/relay/withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1233,7 +1233,7 @@ export async function relayConsolidate(params: {
   
   try {
     // Call relayer endpoint to submit the consolidation
-    const response = await fetch('http://localhost:8787/relay/consolidate', {
+    const response = await fetch(`${RELAYER_ENDPOINTS[0]}/relay/consolidate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -6,6 +6,7 @@ import '../styles/dashboard.css';
 import HowToUseModal from './HowToUseModal';
 import { WalletSelector } from './WalletSelector';
 import SwapModal, { SwapParams } from './SwapModal';
+import { RELAYER_ENDPOINTS } from '../lib/constants';
 
 interface WalletBalance {
   transparentSol: number;
@@ -97,10 +98,7 @@ export function Dashboard({
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const endpoints = [
-          'http://localhost:8787/swap/price',
-          'https://noctura-relayer.onrender.com/swap/price'
-        ];
+        const endpoints = RELAYER_ENDPOINTS.map(ep => `${ep}/swap/price`);
         for (const url of endpoints) {
           try {
             const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
