@@ -22,7 +22,7 @@ import {
   VersionedTransaction,
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { getAssociatedTokenAddressSync, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { NOC_TOKEN_MINT, WSOL_MINT, SOLANA_RPC, RELAYER_ADDRESS } from './constants';
 import { getSwapQuote, formatQuoteForDisplay, SwapQuote } from './relayerSwap';
 import { proveCircuit, ProverResponse } from './prover';
@@ -443,15 +443,53 @@ export async function executeShieldedSwap(
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // ============================================
-    // STEP 5: Re-deposit CHANGE to shielded pool (if any)
+    // STEP 5: Pay privacy fee from withdrawn/swapped funds
     // ============================================
+    onStatusUpdate('Paying privacy fee...');
+    
+    // Transfer 0.25 NOC privacy fee to fee collector
+    // For NOC→SOL: fee comes from the change (already in transparent)
+    // For SOL→NOC: fee comes from the output NOC (already in transparent)
+    const nocMint = new PublicKey(NOC_TOKEN_MINT);
+    const userNocAta = getAssociatedTokenAddressSync(nocMint, keypair.publicKey);
+    const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
+    const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner);
+    
+    const feeTx = new Transaction();
+    feeTx.add(
+      createTransferInstruction(
+        userNocAta,
+        feeCollectorAta,
+        keypair.publicKey,
+        Number(PRIVACY_FEE_ATOMS),
+        [],
+        TOKEN_PROGRAM_ID
+      )
+    );
+    const { blockhash: feeBlockhash } = await connection.getLatestBlockhash();
+    feeTx.recentBlockhash = feeBlockhash;
+    feeTx.feePayer = keypair.publicKey;
+    feeTx.sign(keypair);
+    const feeSig = await connection.sendRawTransaction(feeTx.serialize());
+    await connection.confirmTransaction(feeSig, 'confirmed');
+    console.log('[ShieldedSwap] ✅ Privacy fee paid:', feeSig);
+
+    // ============================================
+    // STEP 6: Re-deposit CHANGE to shielded pool (if any)
+    // ============================================
+    // For NOC→SOL swaps, change is reduced by the privacy fee
+    const actualChangeAtoms = fromToken === 'NOC' 
+      ? changeAtoms - PRIVACY_FEE_ATOMS 
+      : changeAtoms;
+    const actualChangeFloat = Number(actualChangeAtoms) / Math.pow(10, inputDecimals);
+    
     let changeNote: ShieldedNoteRecord | undefined;
-    if (changeAtoms > 0n) {
-      onStatusUpdate(`Re-depositing ${changeFloat.toFixed(2)} ${fromToken} change to shielded pool...`);
-      console.log('[ShieldedSwap] Re-depositing change:', changeAtoms.toString(), fromToken);
+    if (actualChangeAtoms > 0n) {
+      onStatusUpdate(`Re-depositing ${actualChangeFloat.toFixed(2)} ${fromToken} change to shielded pool...`);
+      console.log('[ShieldedSwap] Re-depositing change (after fee):', actualChangeAtoms.toString(), fromToken);
 
       // Prepare change deposit
-      const changeDeposit = prepareDeposit(changeAtoms, fromToken);
+      const changeDeposit = prepareDeposit(actualChangeAtoms, fromToken);
 
       // Generate change deposit proof
       const changeDepositWitness = serializeDepositWitness({ note: changeDeposit.note });
@@ -479,14 +517,20 @@ export async function executeShieldedSwap(
     }
 
     // ============================================
-    // STEP 6: Re-deposit SWAP OUTPUT to shielded pool
+    // STEP 7: Re-deposit SWAP OUTPUT to shielded pool
     // ============================================
     onStatusUpdate(`Depositing ${toToken} back to shielded pool...`);
 
     // Get the output amount from the swap
     const outputDecimals = toToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS;
     const outputAmountFloat = parseFloat(swapResult.outputAmount);
-    const outputAtoms = BigInt(Math.floor(outputAmountFloat * Math.pow(10, outputDecimals)));
+    let outputAtoms = BigInt(Math.floor(outputAmountFloat * Math.pow(10, outputDecimals)));
+    
+    // For SOL→NOC swaps, output is reduced by the privacy fee (already paid above)
+    if (toToken === 'NOC') {
+      outputAtoms = outputAtoms - PRIVACY_FEE_ATOMS;
+      console.log('[ShieldedSwap] Output after privacy fee:', outputAtoms.toString(), toToken);
+    }
 
     // Prepare deposit
     const deposit = prepareDeposit(outputAtoms, toToken);
