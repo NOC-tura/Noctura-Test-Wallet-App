@@ -2004,7 +2004,7 @@ export default function App() {
       setIsConsolidating(false);
       setConsolidateStatusMessage('');
     }
-  }, [keypair, shieldedNotes, markNoteSpent, addShieldedNote, addTransaction]);
+  }, [keypair, shieldedNotes, markNoteSpent, addShieldedNote, addTransaction, setStatus, setIsConsolidating, setConsolidateStatusMessage]);
 
   // Callback for when swap needs consolidation
   const handleSwapNeedsConsolidation = useCallback((token: 'SOL' | 'NOC') => {
