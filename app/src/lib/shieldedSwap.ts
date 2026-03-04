@@ -33,6 +33,7 @@ import { serializeWithdrawWitness, serializeDepositWitness, serializeSwapWitness
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from '../types/shield';
 import { getTokenBalance, getSolBalance } from './solana';
+import { buildConsolidationWitness, partitionNotesForConsolidation } from './consolidate';
 import { 
   shouldUseShieldedPool, 
   getPoolReserves, 
@@ -115,8 +116,6 @@ export async function executeShieldedSwap(
       // TRUE PRIVATE SWAP - No tokens leave shielded system!
       // ============================================
       
-      // For TRUE PRIVATE swap, we need an exact-match note or select multiple notes
-      // and consolidate them BEFORE the swap
       const relevantNotes = shieldedNotes.filter(n => 
         !n.spent && 
         n.owner === walletAddress && 
@@ -127,12 +126,12 @@ export async function executeShieldedSwap(
         throw new Error(`No shielded ${fromToken} notes available`);
       }
 
-      // Calculate exact amount needed: swap amount + privacy fee
+      // Calculate total needed: swap amount + privacy fee
       const totalNeeded = fromToken === 'NOC' 
         ? amountAtoms + PRIVACY_FEE_ATOMS 
         : amountAtoms;
 
-      // First, try to find an exact-match note
+      // Try to find exact-match note
       let exactMatchNote = relevantNotes.find(n => {
         const noteAmount = BigInt(n.amount);
         const diff = noteAmount > amountAtoms ? noteAmount - amountAtoms : amountAtoms - noteAmount;
@@ -140,34 +139,94 @@ export async function executeShieldedSwap(
         return diff <= tolerance;
       });
 
-      if (!exactMatchNote) {
-        // Check if we have notes that can be consolidated to the exact amount
-        const totalAvailable = relevantNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
-        
-        if (totalAvailable < totalNeeded) {
+      let inputNote: ShieldedNoteRecord;
+      let exactInputAmount: bigint;
+
+      if (exactMatchNote) {
+        // Perfect! Use exact-match note directly
+        console.log('[ShieldedSwap] Found exact-match note:', exactMatchNote.amount);
+        inputNote = exactMatchNote;
+        exactInputAmount = BigInt(inputNote.amount);
+      } else {
+        // Need to consolidate - do it automatically
+        console.log('[ShieldedSwap] No exact-match found. Auto-consolidating notes...');
+        onStatusUpdate('Consolidating your shielded notes...');
+
+        // Select notes to cover the amount
+        relevantNotes.sort((a, b) => Number(BigInt(b.amount) - BigInt(a.amount)));
+        const selectedNotes: ShieldedNoteRecord[] = [];
+        let totalSelected = 0n;
+
+        for (const note of relevantNotes) {
+          selectedNotes.push(note);
+          totalSelected += BigInt(note.amount);
+          if (totalSelected >= totalNeeded) break;
+        }
+
+        if (totalSelected < totalNeeded) {
           throw new Error(
-            `Insufficient shielded ${fromToken}. Need ${(totalNeeded / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()}, ` +
-            `have ${(totalAvailable / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()}`
+            `Insufficient shielded ${fromToken}. Have ${(totalSelected / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()}, ` +
+            `need ${(totalNeeded / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()}`
           );
         }
 
-        // User has enough notes but they need consolidation first
-        throw new Error(
-          `No exact-match shielded note found for ${fromToken} swap.\n\n` +
-          `You have ${relevantNotes.length} notes totaling ${(totalAvailable / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()} ${fromToken}.\n\n` +
-          `To swap ${(amountAtoms / BigInt(Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS))).toString()} ${fromToken}:\n` +
-          `1. Go to the Consolidation tool\n` +
-          `2. Select your shielded notes and consolidate them\n` +
-          `3. Return here to swap with the consolidated note\n\n` +
-          `Consolidation merges your multiple notes into one, staying fully shielded throughout.`
-        );
-      }
+        console.log('[ShieldedSwap] Consolidating', selectedNotes.length, 'notes...');
 
-      const inputNote = exactMatchNote;
-      const exactInputAmount = BigInt(inputNote.amount);
-      
-      console.log('[ShieldedSwap] Found exact-match note:', exactInputAmount.toString(), 'atoms');
-      onStatusUpdate('Using exact-match shielded note...');
+        // Build consolidation proof
+        const tokenMint = new PublicKey(fromToken === 'SOL' ? '11111111111111111111111111111111' : NOC_TOKEN_MINT);
+        const consolidationSteps = partitionNotesForConsolidation(selectedNotes, tokenMint, totalNeeded);
+
+        if (consolidationSteps.length === 0) {
+          throw new Error('Failed to consolidate notes');
+        }
+
+        const consolidationStep = consolidationSteps[0];
+        const allUnspent = shieldedNotes.filter(n => n.owner === walletAddress && !n.spent);
+
+        const consolidationWitness = buildConsolidationWitness({
+          inputRecords: consolidationStep.inputRecords,
+          outputNote: consolidationStep.outputNote,
+          allNotesForMerkle: allUnspent,
+        });
+
+        // Generate consolidation proof
+        const consolidationProof = await proveCircuit('consolidate', consolidationWitness);
+        console.log('[ShieldedSwap] Consolidation proof generated');
+
+        // Submit consolidation via relayer and WAIT for confirmation
+        onStatusUpdate('Submitting consolidation to network...');
+        const { relayConsolidate } = await import('./shieldProgram');
+        const outputCommitmentHex = consolidationStep.outputNote.commitment.toString(16).padStart(64, '0');
+        
+        const consolidationResult = await relayConsolidate({
+          proof: consolidationProof,
+          inputNullifiers: consolidationStep.inputRecords.map(n => n.nullifier),
+          outputCommitment: outputCommitmentHex,
+        });
+
+        console.log('[ShieldedSwap] ✅ Consolidation submitted:', consolidationResult.signature);
+        onStatusUpdate('Waiting for consolidation to confirm on-chain...');
+
+        // Wait a bit for on-chain processing before building merkle proof
+        // The relayer should have added the note to the merkle tree by this point
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // Mark input notes as spent locally
+        consolidationStep.inputRecords.forEach(note => {
+          markNoteSpent(note.nullifier);
+        });
+
+        // Create snapshot of consolidated note
+        inputNote = snapshotNote(consolidationStep.outputNote, keypair.publicKey, fromToken, {
+          signature: consolidationResult.signature,
+        });
+        exactInputAmount = BigInt(consolidationStep.outputNote.amount);
+
+        // Add to local state so merkle proof can find it
+        addShieldedNote(inputNote);
+
+        console.log('[ShieldedSwap] Consolidated note ready, proceeding with swap');
+      }
 
       // Step 2: Get pool reserves and calculate output
       onStatusUpdate('Calculating swap output...');
