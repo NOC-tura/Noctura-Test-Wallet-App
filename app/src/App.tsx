@@ -2773,7 +2773,8 @@ export default function App() {
                   });
                 }
                 
-                const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, mintKey);
+                const tokenTypeForConsolidation = tokenType === 'SOL' ? 'SOL' : 'NOC';
+                const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, tokenTypeForConsolidation);
                 const consolidatedNotes: ShieldedNoteRecord[] = [];
                 const walletAddress = keypair.publicKey.toBase58();
                 
@@ -5373,7 +5374,8 @@ export default function App() {
             // Only consolidate if all notes have matching mint
             const notesWithMatchingMint = allNotes.filter(n => n.tokenMintAddress === mintKey.toBase58());
             if (notesWithMatchingMint.length > 1) {
-              const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, mintKey);
+              const tokenTypeStr = tokenType === 'SOL' ? 'SOL' : 'NOC';
+              const consolidationSteps = partitionNotesForConsolidation(notesWithMatchingMint, tokenTypeStr);
               const consolidatedNotes = [];
               const allNotesInTree = useShieldedNotes.getState().notes;
               for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {

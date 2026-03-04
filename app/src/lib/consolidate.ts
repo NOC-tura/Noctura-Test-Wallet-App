@@ -3,9 +3,8 @@
  * when circuit input limits prevent direct withdrawal/transfer
  */
 
-import { PublicKey } from '@solana/web3.js';
 import type { Note } from '@zk-witness/index';
-import { createNoteFromSecrets, createNoteFromSecretsLegacy } from '../lib/shield';
+import { createNoteFromSecrets } from '../lib/shield';
 import { ShieldedNoteRecord } from '../types/shield';
 import { serializeConsolidateWitness } from '@zk-witness/builders/consolidate';
 import { buildMerkleProof } from '../lib/merkle';
@@ -14,15 +13,14 @@ import { buildMerkleProof } from '../lib/merkle';
  * Consolidate multiple notes into one or two larger notes using the consolidate circuit
  * Up to 8 input notes can be consolidated into 1 output note in a single proof
  *
- * @param inputNotes - Array of notes to consolidate (max 8)
- * @param tokenMint - Token mint for all notes
+ * @param inputRecords - Array of notes to consolidate (max 8)
+ * @param tokenType - Token type (SOL or NOC)
  * @param targetAmount - If specified, consolidate to exactly this amount (for partial swaps)
- * @param allNotesForMerkle - All available notes for building merkle proofs
  * @returns Consolidated note(s) that fit within 4-input circuit limits
  */
 export function partitionNotesForConsolidation(
   inputRecords: ShieldedNoteRecord[],
-  tokenMint: PublicKey,
+  tokenType: 'SOL' | 'NOC',
   targetAmount?: bigint,
 ): Array<{
   inputNotes: Note[];
@@ -54,8 +52,8 @@ export function partitionNotesForConsolidation(
       throw new Error(`Target amount ${outputAmount} exceeds total input ${totalInput}`);
     }
 
-    // Use legacy function to create note from PublicKey
-    const outputNote = createNoteFromSecretsLegacy(outputAmount, tokenMint);
+    // Create note with correct tokenMint field for the token type
+    const outputNote = createNoteFromSecrets(outputAmount, tokenType);
 
     return [{ inputNotes, inputRecords, outputNote }];
   }
@@ -87,8 +85,8 @@ export function partitionNotesForConsolidation(
     }));
 
     const totalAmount = inputNotes.reduce((sum, n) => sum + n.amount, 0n);
-    // Use legacy function to create note from PublicKey
-    const outputNote = createNoteFromSecretsLegacy(totalAmount, tokenMint);
+    // Create note with correct tokenMint field for the token type
+    const outputNote = createNoteFromSecrets(totalAmount, tokenType);
 
     steps.push({ inputNotes, inputRecords: batch, outputNote });
   }
