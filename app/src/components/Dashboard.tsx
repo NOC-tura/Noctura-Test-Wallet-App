@@ -6,7 +6,9 @@ import '../styles/dashboard.css';
 import HowToUseModal from './HowToUseModal';
 import { WalletSelector } from './WalletSelector';
 import SwapModal, { SwapParams } from './SwapModal';
+import ConsolidateModal from './ConsolidateModal';
 import { RELAYER_ENDPOINTS } from '../lib/constants';
+import { ShieldedNoteRecord } from '../types/shield';
 
 interface WalletBalance {
   transparentSol: number;
@@ -45,6 +47,17 @@ interface DashboardProps {
   isSwapLoading?: boolean;
   /** Swap status message */
   swapStatusMessage?: string;
+  /** Callback when consolidation is needed for a swap */
+  onConsolidationNeeded?: (token: 'SOL' | 'NOC') => void;
+  /** Consolidate modal state */
+  showConsolidateModal?: boolean;
+  onCloseConsolidateModal?: () => void;
+  consolidateFor?: 'SOL' | 'NOC';
+  isConsolidating?: boolean;
+  consolidateStatusMessage?: string;
+  onConsolidate?: (notes: ShieldedNoteRecord[]) => Promise<void>;
+  /** Shielded notes for consolidation modal */
+  shieldedNotes?: ShieldedNoteRecord[];
 }
 
 export function Dashboard({
@@ -70,6 +83,14 @@ export function Dashboard({
   onSwap,
   isSwapLoading = false,
   swapStatusMessage = '',
+  onConsolidationNeeded,
+  showConsolidateModal = false,
+  onCloseConsolidateModal,
+  consolidateFor = 'SOL',
+  isConsolidating = false,
+  consolidateStatusMessage = '',
+  onConsolidate,
+  shieldedNotes = [],
 }: DashboardProps) {
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showSendModal, setShowSendModal] = useState(false);
@@ -1246,6 +1267,23 @@ export function Dashboard({
           onSwap={handleSwap}
           isLoading={isSwapLoading}
           statusMessage={swapStatusMessage}
+          onConsolidationNeeded={onConsolidationNeeded}
+        />
+
+        {/* Consolidate Modal */}
+        <ConsolidateModal
+          isOpen={showConsolidateModal}
+          onClose={onCloseConsolidateModal || (() => {})}
+          shieldedNotes={shieldedNotes}
+          walletAddress={walletAddress}
+          tokenType={consolidateFor}
+          isLoading={isConsolidating}
+          statusMessage={consolidateStatusMessage}
+          onConsolidate={onConsolidate || (async () => {})}
+          onSuccess={() => {
+            // After consolidation, close the modal and return to swap
+            onCloseConsolidateModal?.();
+          }}
         />
         
         {/* Mobile Bottom Navigation - only visible on mobile */}

@@ -15,6 +15,8 @@ interface SwapModalProps {
   // Loading state
   isLoading?: boolean;
   statusMessage?: string;
+  // Consolidation callback
+  onConsolidationNeeded?: (token: 'SOL' | 'NOC') => void;
 }
 
 export interface SwapParams {
@@ -44,6 +46,7 @@ export function SwapModal({
   onSwap,
   isLoading = false,
   statusMessage = '',
+  onConsolidationNeeded,
 }: SwapModalProps) {
   const [fromToken, setFromToken] = useState<'SOL' | 'NOC'>('SOL');
   const [toToken, setToToken] = useState<'SOL' | 'NOC'>('NOC');
@@ -54,6 +57,7 @@ export function SwapModal({
   const [showSlippageSettings, setShowSlippageSettings] = useState(false);
   const [quote, setQuote] = useState<SwapQuote | null>(null);
   const [fetchingQuote, setFetchingQuote] = useState(false);
+  const [consolidationError, setConsolidationError] = useState<string>('');
 
   const isShielded = mode === 'shielded';
   const themeColor = isShielded ? '#8b5cf6' : '#00f0ff';
@@ -130,6 +134,7 @@ export function SwapModal({
     if (!amount || parseFloat(amount) <= 0 || !quote) return;
 
     try {
+      setConsolidationError(''); // Clear any previous errors
       await onSwap({
         fromToken,
         toToken,
@@ -149,8 +154,16 @@ export function SwapModal({
       setAmount('');
       setQuote(null);
     } catch (err) {
-      // Error is already handled in App.tsx
-      console.error('[SwapModal] Swap error:', err);
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      
+      // Check if this is a consolidation error
+      if (errorMsg.includes('Consolidate Notes') || errorMsg.includes('consolidate')) {
+        setConsolidationError(errorMsg);
+        // Don't re-throw - we'll show the UI to handle this
+      } else {
+        // Other errors are still re-thrown
+        throw err;
+      }
     }
   };
 
@@ -163,7 +176,8 @@ export function SwapModal({
     parsedAmount <= 0 || 
     insufficientBalance || 
     isLoading || 
-    !quote;
+    !quote ||
+    !!consolidationError;
 
   if (!isOpen) return null;
 
@@ -406,6 +420,48 @@ export function SwapModal({
         {insufficientBalance && (
           <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg p-3">
             Insufficient {fromToken} balance. You have {fromBalance.toFixed(fromToken === 'SOL' ? 6 : 2)} {fromToken}.
+          </div>
+        )}
+
+        {/* Consolidation Needed */}
+        {consolidationError && (
+          <div 
+            className="p-4 rounded-lg border space-y-3"
+            style={{ 
+              backgroundColor: `${themeColor}15`,
+              borderColor: `${themeColor}40`,
+            }}
+          >
+            <div className="flex items-start gap-3">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={themeColor} strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 6v6M12 16h0.01"/>
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm" style={{ color: themeColor }}>
+                  <strong>Notes need consolidation</strong>
+                </p>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Your balance is spread across multiple notes. Consolidate them first to enable this swap.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                onConsolidationNeeded?.(fromToken);
+                setConsolidationError('');
+              }}
+              className="w-full py-2 rounded-lg font-semibold text-sm transition"
+              style={{ 
+                backgroundColor: `${themeColor}30`,
+                color: themeColor,
+              }}
+            >
+              ✓ Consolidate Now
+            </button>
+            <p className="text-xs text-neutral-500">
+              After consolidation, return here to complete your swap.
+            </p>
           </div>
         )}
 

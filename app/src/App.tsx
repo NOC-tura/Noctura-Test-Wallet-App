@@ -9,6 +9,7 @@ import { useTransactionHistory, getTransactionDisplayInfo, type TransactionRecor
 import { Dashboard } from './components/Dashboard';
 import UnlockScreen from './components/UnlockScreen';
 import SetPasswordModal from './components/SetPasswordModal';
+import ConsolidateModal from './components/ConsolidateModal';
 import {
   getSolBalance,
   getTokenBalance,
@@ -1760,6 +1761,12 @@ export default function App() {
   const [isSwapLoading, setIsSwapLoading] = useState(false);
   const [swapStatusMessage, setSwapStatusMessage] = useState('');
 
+  // Consolidation state for swap workflow
+  const [showConsolidateModal, setShowConsolidateModal] = useState(false);
+  const [consolidateFor, setConsolidateFor] = useState<'SOL' | 'NOC'>('SOL');
+  const [isConsolidating, setIsConsolidating] = useState(false);
+  const [consolidateStatusMessage, setConsolidateStatusMessage] = useState('');
+
   const refreshBalances = useCallback(async () => {
     if (!keypair) return;
     try {
@@ -1900,7 +1907,110 @@ export default function App() {
     }
   }, [keypair, shieldedNotes, markNoteSpent, addShieldedNote, refreshBalances, addTransaction]);
 
-  // Fetch transparent balances for ALL wallets (for wallet selector dropdown)
+  // Handle consolidation (merge multiple notes into one)
+  const handleConsolidate = useCallback(async (notesToConsolidate: ShieldedNoteRecord[]) => {
+    if (!keypair) {
+      setStatus('Wallet not initialized');
+      return;
+    }
+
+    if (notesToConsolidate.length < 2) {
+      throw new Error('Select at least 2 notes to consolidate');
+    }
+
+    const tokenType = notesToConsolidate[0].tokenType as 'SOL' | 'NOC';
+    const tokenTypeForConsolidation = tokenType === 'SOL' ? 'SOL' : 'NOC';
+    const walletAddress = keypair.publicKey.toBase58();
+
+    try {
+      setIsConsolidating(true);
+      setConsolidateStatusMessage(`Preparing ${notesToConsolidate.length} notes for consolidation...`);
+      console.log('[Consolidate] Starting consolidation of', notesToConsolidate.length, 'notes');
+
+      const consolidationSteps = partitionNotesForConsolidation(notesToConsolidate, tokenTypeForConsolidation);
+      const consolidatedNotes: ShieldedNoteRecord[] = [];
+      const allNotesInTree = [...shieldedNotes, ...consolidatedNotes];
+
+      for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {
+        const step = consolidationSteps[stepIdx];
+        const stepNum = stepIdx + 1;
+
+        try {
+          setConsolidateStatusMessage(`Consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`);
+          console.log(`[Consolidate] Step ${stepNum}: merging ${step.inputNotes.length} notes`);
+
+          const consolidateWitness = buildConsolidationWitness({
+            inputRecords: step.inputRecords,
+            outputNote: step.outputNote,
+            allNotesForMerkle: allNotesInTree,
+          });
+
+          setConsolidateStatusMessage(`Generating proof ${stepNum}/${consolidationSteps.length}…`);
+          const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
+          console.log(`[Consolidate] Proof ${stepNum} generated`);
+
+          setConsolidateStatusMessage(`Submitting consolidation ${stepNum}/${consolidationSteps.length}…`);
+          const relayResult = await relayConsolidate({
+            proof: consolidateProof,
+            inputNullifiers: step.inputNotes.map(n => n.nullifier.toString()),
+            outputCommitment: step.outputNote.commitment.toString(),
+          });
+          console.log(`[Consolidate] Submitted:`, relayResult.signature);
+
+          // Mark input notes as spent
+          step.inputRecords.forEach(note => markNoteSpent(note.nullifier));
+
+          // Add consolidated note to tracking
+          const consolidatedRecord: ShieldedNoteRecord = {
+            owner: walletAddress,
+            commitment: step.outputNote.commitment.toString(),
+            nullifier: step.outputNote.nullifier.toString(),
+            secret: step.outputNote.secret.toString(),
+            blinding: step.outputNote.blinding.toString(),
+            rho: step.outputNote.rho.toString(),
+            tokenMintAddress: tokenType === 'SOL' ? WSOL_MINT : NOC_TOKEN_MINT,
+            tokenMintField: step.outputNote.tokenMint.toString(),
+            amount: step.outputNote.amount.toString(),
+            spent: false,
+            leafIndex: -1,
+            createdAt: Date.now(),
+            tokenType,
+          };
+          consolidatedNotes.push(consolidatedRecord);
+          allNotesInTree.push(consolidatedRecord);
+          addShieldedNote(consolidatedRecord);
+
+          // Record in transaction history
+          addTransaction({
+            type: 'consolidate',
+            status: 'success',
+            signature: relayResult.signature || `consolidate-${Date.now()}`,
+            amount: `${step.inputNotes.length} notes → 1 note`,
+            token: tokenType,
+            from: 'Shielded Vault',
+            to: 'Shielded Vault',
+            isShielded: true,
+            walletAddress,
+          });
+        } catch (stepErr) {
+          console.error(`[Consolidate] Step ${stepNum} failed:`, stepErr);
+          throw new Error(`Consolidation failed: ${stepErr instanceof Error ? stepErr.message : String(stepErr)}`);
+        }
+      }
+
+      setConsolidateStatusMessage('');
+      setStatus(`✅ Consolidated ${notesToConsolidate.length} notes successfully`);
+    } finally {
+      setIsConsolidating(false);
+      setConsolidateStatusMessage('');
+    }
+  }, [keypair, shieldedNotes, markNoteSpent, addShieldedNote, addTransaction]);
+
+  // Callback for when swap needs consolidation
+  const handleSwapNeedsConsolidation = useCallback((token: 'SOL' | 'NOC') => {
+    setConsolidateFor(token);
+    setShowConsolidateModal(true);
+  }, []);
   const refreshAllWalletBalances = useCallback(async () => {
     if (accounts.length === 0) return;
     
@@ -7034,6 +7144,14 @@ export default function App() {
         onSwap={handleSwap}
         isSwapLoading={isSwapLoading}
         swapStatusMessage={swapStatusMessage}
+        onConsolidationNeeded={handleSwapNeedsConsolidation}
+        showConsolidateModal={showConsolidateModal}
+        onCloseConsolidateModal={() => setShowConsolidateModal(false)}
+        consolidateFor={consolidateFor}
+        isConsolidating={isConsolidating}
+        consolidateStatusMessage={consolidateStatusMessage}
+        onConsolidate={handleConsolidate}
+        shieldedNotes={shieldedNotes}
         onReceive={() => {
           // Receive is automatically handled by dashboard modal
         }}
