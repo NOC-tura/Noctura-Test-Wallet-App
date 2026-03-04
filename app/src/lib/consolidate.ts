@@ -16,12 +16,14 @@ import { buildMerkleProof } from '../lib/merkle';
  *
  * @param inputNotes - Array of notes to consolidate (max 8)
  * @param tokenMint - Token mint for all notes
+ * @param targetAmount - If specified, consolidate to exactly this amount (for partial swaps)
  * @param allNotesForMerkle - All available notes for building merkle proofs
  * @returns Consolidated note(s) that fit within 4-input circuit limits
  */
 export function partitionNotesForConsolidation(
   inputRecords: ShieldedNoteRecord[],
   tokenMint: PublicKey,
+  targetAmount?: bigint,
 ): Array<{
   inputNotes: Note[];
   inputRecords: ShieldedNoteRecord[];
@@ -43,9 +45,17 @@ export function partitionNotesForConsolidation(
       nullifier: BigInt(record.nullifier),
     }));
 
-    const totalAmount = inputNotes.reduce((sum, n) => sum + n.amount, 0n);
+    // Use target amount if specified, otherwise use total
+    const outputAmount = targetAmount !== undefined ? targetAmount : inputNotes.reduce((sum, n) => sum + n.amount, 0n);
+    
+    // Verify we have enough
+    const totalInput = inputNotes.reduce((sum, n) => sum + n.amount, 0n);
+    if (outputAmount > totalInput) {
+      throw new Error(`Target amount ${outputAmount} exceeds total input ${totalInput}`);
+    }
+
     // Use legacy function to create note from PublicKey
-    const outputNote = createNoteFromSecretsLegacy(totalAmount, tokenMint);
+    const outputNote = createNoteFromSecretsLegacy(outputAmount, tokenMint);
 
     return [{ inputNotes, inputRecords, outputNote }];
   }
