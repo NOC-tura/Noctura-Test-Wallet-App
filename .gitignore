@@ -68,3 +68,6 @@ test-ledger/
 # Keep example files but ignore actual env files
 !.env.example
 !**/.env.example
+
+# Local Netlify folder
+.netlify
