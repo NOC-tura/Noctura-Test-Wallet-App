@@ -1834,6 +1834,70 @@ export default function App() {
           addShieldedNote: (note) => {
             addShieldedNote(note);
           },
+          // Auto-consolidation callback for swap
+          onConsolidateNotes: async (notesToConsolidate) => {
+            console.log('[Swap] Initiating auto-consolidation for', notesToConsolidate.length, 'notes');
+            // Handle consolidation internally without showing UI
+            const tokenType = notesToConsolidate[0].tokenType as 'SOL' | 'NOC';
+            const consolidationSteps = partitionNotesForConsolidation(notesToConsolidate, tokenType);
+            const consolidatedNotes: ShieldedNoteRecord[] = [];
+            const walletAddr = keypair.publicKey.toBase58();
+
+            for (let stepIdx = 0; stepIdx < consolidationSteps.length; stepIdx++) {
+              const step = consolidationSteps[stepIdx];
+              const stepNum = stepIdx + 1;
+
+              try {
+                const stepMsg = `Auto-consolidating batch ${stepNum}/${consolidationSteps.length}… (proof generation ~30-60s)`;
+                setSwapStatusMessage(stepMsg);
+                console.log('[Swap]', stepMsg);
+
+                const consolidateWitness = buildConsolidationWitness({
+                  inputRecords: step.inputRecords,
+                  outputNote: step.outputNote,
+                  allNotesForMerkle: [...shieldedNotes, ...consolidatedNotes],
+                });
+
+                setSwapStatusMessage(`Auto-consolidating: Generating proof ${stepNum}/${consolidationSteps.length}…`);
+                const consolidateProof = await proveCircuit('consolidate', consolidateWitness);
+
+                setSwapStatusMessage(`Auto-consolidating: Submitting ${stepNum}/${consolidationSteps.length}…`);
+                const relayResult = await relayConsolidate({
+                  proof: consolidateProof,
+                  inputNullifiers: step.inputNotes.map(n => n.nullifier.toString()),
+                  outputCommitment: step.outputNote.commitment.toString(),
+                });
+
+                // Mark inputs as spent
+                step.inputRecords.forEach(note => markNoteSpent(note.nullifier));
+
+                // Create consolidated note record
+                const consolidatedRecord: ShieldedNoteRecord = {
+                  owner: walletAddr,
+                  commitment: step.outputNote.commitment.toString(),
+                  nullifier: step.outputNote.nullifier.toString(),
+                  secret: step.outputNote.secret.toString(),
+                  blinding: step.outputNote.blinding.toString(),
+                  rho: step.outputNote.rho.toString(),
+                  tokenMintAddress: tokenType === 'SOL' ? WSOL_MINT : NOC_TOKEN_MINT,
+                  tokenMintField: step.outputNote.tokenMint.toString(),
+                  amount: step.outputNote.amount.toString(),
+                  spent: false,
+                  leafIndex: -1,
+                  createdAt: Date.now(),
+                  tokenType,
+                };
+                consolidatedNotes.push(consolidatedRecord);
+                addShieldedNote(consolidatedRecord);
+              } catch (err) {
+                console.error('[Swap] Auto-consolidation step failed:', err);
+                throw err;
+              }
+            }
+
+            console.log('[Swap] Auto-consolidation complete:', consolidatedNotes.length, 'consolidated notes');
+            return consolidatedNotes;
+          },
         });
 
         if (!result.success) {
