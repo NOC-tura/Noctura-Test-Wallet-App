@@ -75,33 +75,48 @@ export function serializeConsolidateWitness({
 
   // Pad input arrays to MAX_INPUTS with zeros
   // This is required because the circuit is instantiated with Consolidate(8)
-  const paddedSecrets = inputNotes.map((n) => n.secret.toString());
-  const paddedAmounts = inputNotes.map((n) => n.amount.toString());
-  const paddedBlindings = inputNotes.map((n) => n.blinding.toString());
-  const paddedRhos = inputNotes.map((n) => n.rho.toString());
-  const paddedNullifiers = inputNotes.map((n) => n.nullifier.toString());
+  const paddedSecrets: string[] = [];
+  const paddedAmounts: string[] = [];
+  const paddedBlindings: string[] = [];
+  const paddedRhos: string[] = [];
+  const paddedNullifiers: string[] = [];
   
-  // Pad with zeros to reach MAX_INPUTS
-  while (paddedSecrets.length < MAX_INPUTS) {
-    paddedSecrets.push('0');
-    paddedAmounts.push('0');
-    paddedBlindings.push('0');
-    paddedRhos.push('0');
-    paddedNullifiers.push('0');
+  // Add real values
+  for (let i = 0; i < inputNotes.length; i++) {
+    paddedSecrets[i] = inputNotes[i].secret.toString();
+    paddedAmounts[i] = inputNotes[i].amount.toString();
+    paddedBlindings[i] = inputNotes[i].blinding.toString();
+    paddedRhos[i] = inputNotes[i].rho.toString();
+    paddedNullifiers[i] = inputNotes[i].nullifier.toString();
+  }
+  
+  // Fill remaining slots with zeros
+  for (let i = inputNotes.length; i < MAX_INPUTS; i++) {
+    paddedSecrets[i] = '0';
+    paddedAmounts[i] = '0';
+    paddedBlindings[i] = '0';
+    paddedRhos[i] = '0';
+    paddedNullifiers[i] = '0';
   }
 
-  // Merkle proofs: pad to MAX_INPUTS with empty proofs
+  // Merkle proofs: must have exactly 8 entries
   const TREE_HEIGHT = 20;
-  const paddedPathElements = merkleProofs.map((p) => p.pathElements.map((x) => x.toString()));
-  const paddedPathIndices = merkleProofs.map((p) => p.pathIndices.map((x) => x.toString()));
+  const paddedPathElements: string[][] = [];
+  const paddedPathIndices: string[][] = [];
   
-  // Pad merkle proofs with zero-filled arrays
-  while (paddedPathElements.length < MAX_INPUTS) {
-    paddedPathElements.push(Array(TREE_HEIGHT).fill('0'));
-    paddedPathIndices.push(Array(TREE_HEIGHT).fill('0'));
+  // Add real merkle proofs
+  for (let i = 0; i < merkleProofs.length; i++) {
+    paddedPathElements[i] = merkleProofs[i].pathElements.map((x) => x.toString());
+    paddedPathIndices[i] = merkleProofs[i].pathIndices.map((x) => x.toString());
+  }
+  
+  // Fill remaining slots with zero-filled proofs
+  for (let i = merkleProofs.length; i < MAX_INPUTS; i++) {
+    paddedPathElements[i] = Array(TREE_HEIGHT).fill('0');
+    paddedPathIndices[i] = Array(TREE_HEIGHT).fill('0');
   }
 
-  return {
+  const witness: ConsolidateWitness = {
     inSecrets: paddedSecrets,
     inAmounts: paddedAmounts,
     tokenMint: firstTokenMint.toString(),
@@ -114,6 +129,18 @@ export function serializeConsolidateWitness({
     outBlinding: outputNote.blinding.toString(),
     nullifiers: paddedNullifiers,
   };
+  
+  // DEBUG: Log the actual array lengths being sent
+  console.log('[ConsolidateWitness] Built witness with:');
+  console.log(`  - inSecrets: ${witness.inSecrets.length} entries`);
+  console.log(`  - inAmounts: ${witness.inAmounts.length} entries`);
+  console.log(`  - blindings: ${witness.blindings.length} entries`);
+  console.log(`  - rhos: ${witness.rhos.length} entries`);
+  console.log(`  - pathElements: ${witness.pathElements.length} rows`);
+  console.log(`  - nullifiers: ${witness.nullifiers.length} entries`);
+  console.log(`  - Actual input notes: ${inputNotes.length}, merkle proofs: ${merkleProofs.length}`);
+  
+  return witness;
 }
 
 /**
