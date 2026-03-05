@@ -1837,7 +1837,6 @@ export default function App() {
           // Auto-consolidation callback for swap
           onConsolidateNotes: async (notesToConsolidate) => {
             console.log('[Swap] Initiating auto-consolidation for', notesToConsolidate.length, 'notes');
-            // Handle consolidation internally without showing UI
             const tokenType = notesToConsolidate[0].tokenType as 'SOL' | 'NOC';
             const consolidationSteps = partitionNotesForConsolidation(notesToConsolidate, tokenType);
             const consolidatedNotes: ShieldedNoteRecord[] = [];
@@ -1852,10 +1851,17 @@ export default function App() {
                 setSwapStatusMessage(stepMsg);
                 console.log('[Swap]', stepMsg);
 
+                // Build merkle tree with ALL unspent notes at this moment
+                // This includes original notes plus any previously consolidated notes
+                const allUnspentNotes = shieldedNotes.filter(n => !n.spent && n.owner === walletAddr);
+                const allNotesInTree = [...allUnspentNotes, ...consolidatedNotes];
+                
+                console.log('[Swap] Building consolidation witness with', allNotesInTree.length, 'notes in tree, consolidating', step.inputRecords.length, 'input notes');
+
                 const consolidateWitness = buildConsolidationWitness({
                   inputRecords: step.inputRecords,
                   outputNote: step.outputNote,
-                  allNotesForMerkle: [...shieldedNotes, ...consolidatedNotes],
+                  allNotesForMerkle: allNotesInTree,
                 });
 
                 setSwapStatusMessage(`Auto-consolidating: Generating proof ${stepNum}/${consolidationSteps.length}…`);
