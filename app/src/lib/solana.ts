@@ -17,7 +17,12 @@ import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { HeliusRpcUrl, NOC_TOKEN_MINT, SHIELD_PROGRAM_ID } from './constants';
 
-export const connection = new Connection(HeliusRpcUrl, 'confirmed');
+// Create connection without WebSocket to avoid CORS/connection issues
+// The /rpc proxy endpoint is HTTP-only, not WebSocket
+export const connection = new Connection(HeliusRpcUrl, {
+  commitment: 'confirmed',
+  wsEndpoint: undefined, // Disable WebSocket subscriptions
+});
 
 /**
  * Polling-based transaction confirmation that doesn't use blockheight
