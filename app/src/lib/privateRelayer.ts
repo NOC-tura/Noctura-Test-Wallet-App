@@ -2,6 +2,40 @@ import { Keypair, PublicKey, Transaction, VersionedTransaction } from '@solana/w
 import { connection } from './solana';
 
 /**
+ * Polling-based transaction confirmation that doesn't use blockheight or timeouts
+ */
+async function pollForConfirmation(signature: string, label: string): Promise<void> {
+  let confirmed = false;
+  let attempts = 0;
+  const maxAttempts = 90;
+  
+  while (!confirmed && attempts < maxAttempts) {
+    try {
+      const status = await connection.getSignatureStatus(signature);
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+        }
+        confirmed = true;
+        break;
+      }
+      if (status.value?.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+      }
+    } catch (pollErr) {
+      // Ignore polling errors, retry
+    }
+    attempts++;
+    if (!confirmed && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  if (!confirmed) {
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s`);
+  }
+}
+
+/**
  * Private Relayer System for 100% Privacy
  * 
  * Features:
@@ -140,12 +174,8 @@ class PrivateRelayer {
 
               const signature = await connection.sendTransaction(pendingTx.transaction as VersionedTransaction);
               
-              // Confirm with variable commitment for timing obfuscation
-              const confirmations = await connection.confirmTransaction(signature, 'confirmed');
-              
-              if (confirmations.value.err) {
-                throw new Error(`Transaction failed: ${confirmations.value.err}`);
-              }
+              // Confirm with polling - no blockheight timeout
+              await pollForConfirmation(signature, `PrivateRelayer tx ${pendingTx.id}`);
 
               console.log(`[PrivateRelayer] Transaction ${pendingTx.id} confirmed: ${signature.slice(0, 8)}...`);
               

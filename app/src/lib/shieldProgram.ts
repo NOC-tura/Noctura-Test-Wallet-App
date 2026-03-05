@@ -742,7 +742,7 @@ export async function submitShieldedWithdraw(params: {
     tx.feePayer = keypair.publicKey;
     tx.sign(keypair);
     const createSig = await connection.sendRawTransaction(tx.serialize());
-    await connection.confirmTransaction(createSig, 'confirmed');
+    await pollForConfirmation(connection, createSig, 'submitShieldedWithdraw (output ATA)');
     console.log('Created ATA:', createSig);
   }
 
@@ -778,7 +778,7 @@ export async function submitShieldedWithdraw(params: {
   tx.feePayer = keypair.publicKey;
   tx.sign(keypair);
   const signature = await connection.sendRawTransaction(tx.serialize());
-  await connection.confirmTransaction(signature, 'confirmed');
+  await pollForConfirmation(connection, signature, 'submitShieldedWithdraw');
 
   // Collect 0.25 NOC privacy fee AFTER withdrawal (using freshly-withdrawn tokens)
   // This way the fee comes from the shielded balance (via the withdrawn amount)
@@ -980,7 +980,7 @@ export async function submitShieldedTransfer(params: {
   tx.feePayer = keypair.publicKey;
   tx.sign(keypair);
   const signature = await connection.sendRawTransaction(tx.serialize());
-  await connection.confirmTransaction(signature, 'confirmed');
+  await pollForConfirmation(connection, signature, 'submitShieldedTransfer');
 
   return signature;
 }

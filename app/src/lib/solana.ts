@@ -1,4 +1,4 @@
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -18,6 +18,45 @@ import bs58 from 'bs58';
 import { HeliusRpcUrl, NOC_TOKEN_MINT, SHIELD_PROGRAM_ID } from './constants';
 
 export const connection = new Connection(HeliusRpcUrl, 'confirmed');
+
+/**
+ * Polling-based transaction confirmation that doesn't use blockheight
+ * (which expires too quickly on slow devnet). Checks every 500ms for up to 45 seconds.
+ */
+async function pollForConfirmation(conn: Connection, signature: string, label: string): Promise<void> {
+  let confirmed = false;
+  let attempts = 0;
+  const maxAttempts = 90; // 90 * 500ms = 45 second timeout
+  
+  while (!confirmed && attempts < maxAttempts) {
+    try {
+      const status = await conn.getSignatureStatus(signature);
+      
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
+        }
+        confirmed = true;
+        break;
+      }
+      
+      if (status.value?.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+      }
+    } catch (pollErr) {
+      // Ignore polling errors, retry
+    }
+    
+    attempts++;
+    if (!confirmed && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  
+  if (!confirmed) {
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s`);
+  }
+}
 
 async function estimateTransactionFeeInSol(tx: Transaction, feePayer: PublicKey): Promise<number> {
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
@@ -145,7 +184,7 @@ export function keypairToSecret(keypair: Keypair): string {
 
 export async function requestSolAirdrop(keypair: Keypair, sol = 1): Promise<string> {
   const signature = await connection.requestAirdrop(keypair.publicKey, sol * 1_000_000_000);
-  await connection.confirmTransaction(signature, 'confirmed');
+  await pollForConfirmation(connection, signature, 'requestSolAirdrop');
   return signature;
 }
 
@@ -326,7 +365,12 @@ export async function wrapSol(
   instructions.push(createSyncNativeInstruction(wsolAta));
 
   const tx = new Transaction().add(...instructions);
-  const signature = await sendAndConfirmTransaction(connection, tx, [keypair]);
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const signature = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, signature, 'wrapSol');
   
   return { signature, wsolAta };
 }
@@ -352,7 +396,13 @@ export async function unwrapSol(keypair: Keypair): Promise<string> {
     ),
   );
   
-  return sendAndConfirmTransaction(connection, tx, [keypair]);
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const signature = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, signature, 'unwrapSol');
+  return signature;
 }
 
 /**

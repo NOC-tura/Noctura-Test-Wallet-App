@@ -10,13 +10,46 @@ import {
   Keypair, 
   PublicKey, 
   Transaction,
-  sendAndConfirmTransaction,
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import BN from 'bn.js';
 import { connection } from './solana';
 import { getProgramForKeypair, deriveShieldPdas } from './anchorClient';
 import { SOLANA_RPC } from './constants';
+
+/**
+ * Polling-based transaction confirmation that doesn't use blockheight or timeouts
+ */
+async function pollForConfirmation(conn: Connection, signature: string, label: string): Promise<void> {
+  let confirmed = false;
+  let attempts = 0;
+  const maxAttempts = 90;
+  
+  while (!confirmed && attempts < maxAttempts) {
+    try {
+      const status = await conn.getSignatureStatus(signature);
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+        }
+        confirmed = true;
+        break;
+      }
+      if (status.value?.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+      }
+    } catch (pollErr) {
+      // Ignore polling errors, retry
+    }
+    attempts++;
+    if (!confirmed && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  if (!confirmed) {
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s`);
+  }
+}
 
 // Pool fee in basis points (e.g., 30 = 0.3%)
 export const DEFAULT_SWAP_FEE_BPS = 30;
@@ -138,9 +171,12 @@ export async function initializeShieldedPool(
     })
     .transaction();
 
-  const sig = await sendAndConfirmTransaction(connection, tx, [adminKeypair], {
-    commitment: 'confirmed',
-  });
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = adminKeypair.publicKey;
+  tx.sign(adminKeypair);
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, sig, 'initializeShieldedPool');
 
   console.log('[ShieldedPool] Initialized:', sig);
   return sig;
@@ -169,9 +205,12 @@ export async function seedShieldedPool(
     })
     .transaction();
 
-  const sig = await sendAndConfirmTransaction(connection, tx, [adminKeypair], {
-    commitment: 'confirmed',
-  });
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = adminKeypair.publicKey;
+  tx.sign(adminKeypair);
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, sig, 'seedShieldedPool');
 
   console.log('[ShieldedPool] Seeded with', solAmount.toString(), 'SOL and', nocAmount.toString(), 'NOC');
   return sig;
@@ -239,9 +278,12 @@ export async function executeShieldedPoolSwap(
 
   tx.add(swapIx);
 
-  const sig = await sendAndConfirmTransaction(connection, tx, [keypair], {
-    commitment: 'confirmed',
-  });
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, sig, 'executeShieldedPoolSwap');
 
   console.log('[ShieldedPool] Swap executed:', sig);
   return sig;

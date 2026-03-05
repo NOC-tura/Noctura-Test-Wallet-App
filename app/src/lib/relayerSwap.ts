@@ -26,6 +26,41 @@ import { NOC_TOKEN_MINT, SOLANA_RPC, RELAYER_ENDPOINTS } from './constants';
 const RELAYER_SWAP_BASE = `${RELAYER_ENDPOINTS[0]}/swap`;
 console.log('[Swap] Using relayer endpoint:', RELAYER_SWAP_BASE);
 
+/**
+ * Polling-based transaction confirmation that doesn't use blockheight
+ * Checks every 500ms for up to 45 seconds.
+ */
+async function pollForConfirmation(conn: Connection, signature: string, label: string): Promise<void> {
+  let confirmed = false;
+  let attempts = 0;
+  const maxAttempts = 90;
+  
+  while (!confirmed && attempts < maxAttempts) {
+    try {
+      const status = await conn.getSignatureStatus(signature);
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+        }
+        confirmed = true;
+        break;
+      }
+      if (status.value?.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+      }
+    } catch (pollErr) {
+      // Ignore polling errors, retry
+    }
+    attempts++;
+    if (!confirmed && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  if (!confirmed) {
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s`);
+  }
+}
+
 export interface SwapQuote {
   inputToken: 'SOL' | 'NOC';
   inputAmount: number;
@@ -210,7 +245,7 @@ export async function executeSwap(
       transaction.sign(keypair);
 
       transferSignature = await conn.sendRawTransaction(transaction.serialize());
-      await conn.confirmTransaction(transferSignature, 'confirmed');
+      await pollForConfirmation(conn, transferSignature, 'relayerSwap (SOL transfer)');
     } else {
       // Transfer NOC tokens to relayer
       const nocMint = new PublicKey(NOC_TOKEN_MINT);
@@ -249,7 +284,7 @@ export async function executeSwap(
       transaction.sign(keypair);
 
       transferSignature = await conn.sendRawTransaction(transaction.serialize());
-      await conn.confirmTransaction(transferSignature, 'confirmed');
+      await pollForConfirmation(conn, transferSignature, 'relayerSwap (NOC transfer)');
     }
 
     console.log('[Swap] Transfer complete:', transferSignature);
