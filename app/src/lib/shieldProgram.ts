@@ -295,7 +295,7 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
   
   try {
     console.log('[collectPrivacyFee] Sending transaction to blockchain...');
-    // Use custom confirmation with 60 second timeout for slow devnet
+    // Use custom confirmation with extended polling for slow devnet
     const latestBlock = await connection.getLatestBlockhash();
     tx.recentBlockhash = latestBlock.blockhash;
     tx.feePayer = keypair.publicKey;
@@ -306,16 +306,43 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
       maxRetries: 2,
     });
     
-    // Confirm with explicit timeout of 60 seconds
-    console.log('[collectPrivacyFee] Waiting for confirmation (up to 60s)...');
-    const confirmationResult = await connection.confirmTransaction({
-      signature,
-      blockhash: latestBlock.blockhash,
-      lastValidBlockHeight: latestBlock.lastValidBlockHeight,
-    }, 'confirmed');
+    console.log('[collectPrivacyFee] Transaction sent:', signature);
+    console.log('[collectPrivacyFee] Waiting for confirmation (polling up to 90s)...');
     
-    if (confirmationResult.value.err) {
-      throw new Error(`Transaction failed: ${JSON.stringify(confirmationResult.value.err)}`);
+    // Simple polling-based confirmation that doesn't rely on blockheight
+    // which can expire on slow devnet
+    let confirmed = false;
+    let attempts = 0;
+    const maxAttempts = 45; // 45 * 2s = 90 second timeout
+    
+    while (!confirmed && attempts < maxAttempts) {
+      try {
+        const status = await connection.getSignatureStatus(signature);
+        
+        if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+          if (status.value.err) {
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
+          }
+          confirmed = true;
+          console.log('[collectPrivacyFee] ✅ Transaction confirmed at attempt', attempts + 1);
+          break;
+        }
+        
+        if (status.value?.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+        }
+      } catch (pollErr) {
+        // Ignore polling errors, retry
+      }
+      
+      attempts++;
+      if (!confirmed && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+      }
+    }
+    
+    if (!confirmed) {
+      throw new Error(`Transaction not confirmed after ${attempts * 2} seconds. Please check manually.`);
     }
     
     console.log('[collectPrivacyFee] ✅ Privacy fee collected successfully:', signature);
