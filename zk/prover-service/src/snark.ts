@@ -126,6 +126,18 @@ async function generateProofSnarkjs(circuit: string, input: Record<string, unkno
     });
   }
   const artifacts = cache.get(circuit)!;
+  
+  // Log input validation for debugging
+  if (circuit === 'consolidate') {
+    console.log(`[snarkjs:${circuit}] Input validation:`);
+    console.log(`  - Keys: ${Object.keys(input).sort().join(', ')}`);
+    if (typeof input.inSecrets === 'object' && Array.isArray(input.inSecrets)) {
+      console.log(`  - inSecrets: array of ${input.inSecrets.length} values`);
+    } else {
+      console.log(`  - inSecrets: NOT AN ARRAY (type: ${typeof input.inSecrets})`);
+    }
+  }
+  
   const start = performance.now();
   const { proof, publicSignals } = await snarkjs.groth16.fullProve(input, artifacts.wasm, artifacts.zkey);
   const proverMs = performance.now() - start;

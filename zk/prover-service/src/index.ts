@@ -98,7 +98,25 @@ app.post('/rpc', async (req: Request, res: Response) => {
 app.post('/prove/:circuit', async (req: Request, res: Response) => {
   try {
     const circuit = req.params.circuit;
-    const proof = await generateProof(circuit, req.body || {});
+    const input = req.body || {};
+    
+    // Log consolidate witness structure for debugging
+    if (circuit === 'consolidate') {
+      console.log(`[Prover] Consolidate witness received:`);
+      console.log(`  - inSecrets length: ${input.inSecrets?.length || 'MISSING'}`);
+      console.log(`  - inAmounts length: ${input.inAmounts?.length || 'MISSING'}`);
+      console.log(`  - blindings length: ${input.blindings?.length || 'MISSING'}`);
+      console.log(`  - rhos length: ${input.rhos?.length || 'MISSING'}`);
+      console.log(`  - pathElements length: ${input.pathElements?.length || 'MISSING'}`);
+      console.log(`  - pathElements[0] length: ${input.pathElements?.[0]?.length || 'MISSING'}`);
+      console.log(`  - nullifiers length: ${input.nullifiers?.length || 'MISSING'}`);
+      console.log(`  - merkleRoot: ${input.merkleRoot?.slice?.(0, 20) || 'MISSING'}...`);
+      console.log(`  - tokenMint: ${input.tokenMint?.slice?.(0, 20) || 'MISSING'}...`);
+      console.log(`  - outSecret: ${input.outSecret?.slice?.(0, 20) || 'MISSING'}...`);
+      console.log(`  - outBlinding: ${input.outBlinding?.slice?.(0, 20) || 'MISSING'}...`);
+    }
+    
+    const proof = await generateProof(circuit, input);
     res.json(proof);
   } catch (err) {
     console.error(err);
