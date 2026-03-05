@@ -307,13 +307,12 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
     });
     
     console.log('[collectPrivacyFee] Transaction sent:', signature);
-    console.log('[collectPrivacyFee] Waiting for confirmation (polling up to 90s)...');
+    console.log('[collectPrivacyFee] Waiting for confirmation...');
     
-    // Simple polling-based confirmation that doesn't rely on blockheight
-    // which can expire on slow devnet
+    // Fast polling-based confirmation (check every 500ms, timeout after 45s)
     let confirmed = false;
     let attempts = 0;
-    const maxAttempts = 45; // 45 * 2s = 90 second timeout
+    const maxAttempts = 90; // 90 * 500ms = 45 second timeout
     
     while (!confirmed && attempts < maxAttempts) {
       try {
@@ -324,7 +323,7 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
             throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
           }
           confirmed = true;
-          console.log('[collectPrivacyFee] ✅ Transaction confirmed at attempt', attempts + 1);
+          console.log('[collectPrivacyFee] ✅ Confirmed in', (attempts * 0.5).toFixed(1), 'seconds');
           break;
         }
         
@@ -337,12 +336,12 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
       
       attempts++;
       if (!confirmed && attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+        await new Promise(resolve => setTimeout(resolve, 500)); // Check every 500ms
       }
     }
     
     if (!confirmed) {
-      throw new Error(`Transaction not confirmed after ${attempts * 2} seconds. Please check manually.`);
+      throw new Error(`Transaction not confirmed after ${(attempts * 0.5).toFixed(1)} seconds. Please check manually.`);
     }
     
     console.log('[collectPrivacyFee] ✅ Privacy fee collected successfully:', signature);
