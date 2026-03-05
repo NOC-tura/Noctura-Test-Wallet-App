@@ -1,6 +1,6 @@
 import { Buffer } from 'buffer';
 import type { AnchorProvider } from '@coral-xyz/anchor';
-import { Keypair, PublicKey, SYSVAR_RENT_PUBKEY, SystemProgram, Transaction, sendAndConfirmTransaction, ComputeBudgetProgram } from '@solana/web3.js';
+import { Keypair, PublicKey, SYSVAR_RENT_PUBKEY, SystemProgram, Transaction, sendAndConfirmTransaction, ComputeBudgetProgram, Connection } from '@solana/web3.js';
 import BN from 'bn.js';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -20,6 +20,46 @@ import { RandomizedTiming, ANONYMITY_LEVELS, AnonymityConfig } from './anonymity
 // This is a FIXED fee, not percentage-based. No fees in SOL or other tokens.
 // This fee powers the Noctura privacy ecosystem
 export const PRIVACY_FEE_ATOMS = 250_000n; // 0.25 NOC in atoms (6 decimals)
+
+/**
+ * Polling-based transaction confirmation that doesn't use blockheight
+ * (which expires too quickly on slow devnet). Checks every 500ms for up to 45 seconds.
+ */
+async function pollForConfirmation(conn: Connection, signature: string, label: string): Promise<void> {
+  let confirmed = false;
+  let attempts = 0;
+  const maxAttempts = 90; // 90 * 500ms = 45 second timeout
+  
+  while (!confirmed && attempts < maxAttempts) {
+    try {
+      const status = await conn.getSignatureStatus(signature);
+      
+      if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
+        if (status.value.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
+        }
+        confirmed = true;
+        console.log(`[${label}] ✅ Confirmed in ${(attempts * 0.5).toFixed(1)}s`);
+        break;
+      }
+      
+      if (status.value?.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+      }
+    } catch (pollErr) {
+      // Ignore polling errors, retry
+    }
+    
+    attempts++;
+    if (!confirmed && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  
+  if (!confirmed) {
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s. Please check manually.`);
+  }
+}
 
 export function base64ToBytes(payload: string): Uint8Array {
   if (typeof atob !== 'undefined') {
@@ -209,9 +249,13 @@ export async function ensureAta(keypair: Keypair, mint: PublicKey): Promise<Publ
       ASSOCIATED_TOKEN_PROGRAM_ID,
     );
     const program = getProgramForKeypair(keypair);
-    const provider = program.provider as AnchorProvider;
     const tx = new Transaction().add(ix);
-    await provider.sendAndConfirm(tx, [keypair]);
+    const { blockhash } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = keypair.publicKey;
+    tx.sign(keypair);
+    const signature = await connection.sendRawTransaction(tx.serialize());
+    await pollForConfirmation(connection, signature, 'ensureAta');
   }
   return ata;
 }
@@ -259,7 +303,6 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
   
   // Ensure fee collector's NOC account exists
   const feeCollectorInfo = await connection.getAccountInfo(feeCollectorNocAccount);
-  const provider = program.provider as AnchorProvider;
   
   const tx = new Transaction();
   
@@ -429,7 +472,12 @@ export async function submitShieldedDeposit(params: {
             TOKEN_PROGRAM_ID,
           )
         );
-        await sendAndConfirmTransaction(connection, feeTx, [keypair]);
+        const { blockhash: feeBlockhash } = await connection.getLatestBlockhash();
+        feeTx.recentBlockhash = feeBlockhash;
+        feeTx.feePayer = keypair.publicKey;
+        feeTx.sign(keypair);
+        const feeSig = await connection.sendRawTransaction(feeTx.serialize());
+        await pollForConfirmation(connection, feeSig, 'submitShieldedDeposit (privacy fee)');
         console.log('[submitShieldedDeposit] ✅ Privacy fee collected');
       } else {
         console.log('[submitShieldedDeposit] Skipping privacy fee (swap re-deposit)');
@@ -554,9 +602,13 @@ export async function submitShieldedDeposit(params: {
           TOKEN_PROGRAM_ID,
           ASSOCIATED_TOKEN_PROGRAM_ID,
         );
-        const provider = program.provider as AnchorProvider;
         const tx = new Transaction().add(createAtaIx);
-        const sig = await provider.sendAndConfirm(tx, [keypair]);
+        const { blockhash: ataBlockhash } = await connection.getLatestBlockhash();
+        tx.recentBlockhash = ataBlockhash;
+        tx.feePayer = keypair.publicKey;
+        tx.sign(keypair);
+        const sig = await connection.sendRawTransaction(tx.serialize());
+        await pollForConfirmation(connection, sig, 'submitShieldedDeposit (fee collector ATA)');
         console.log('[submitShieldedDeposit] Created fee collector ATA, signature:', sig);
         // Wait a bit for the account to be confirmed
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -631,7 +683,7 @@ export async function submitShieldedDeposit(params: {
     tx.feePayer = keypair.publicKey;
     tx.sign(keypair);
     const signature = await connection.sendRawTransaction(tx.serialize());
-    await connection.confirmTransaction(signature, 'confirmed');
+    await pollForConfirmation(connection, signature, 'submitShieldedDeposit');
 
     console.log('[submitShieldedDeposit] Deposit transaction submitted successfully:', signature);
     return { signature, leafIndex };
@@ -758,7 +810,6 @@ export async function submitShieldedWithdrawSol(params: {
   }
   const program = getProgramForKeypair(keypair);
   const pdas = deriveShieldPdas();
-  const provider = program.provider as AnchorProvider;
 
   // Prepare proof data
   const proofBytes = base64ToBytes(proof.proofBytes);
@@ -849,7 +900,12 @@ export async function submitShieldedWithdrawSol(params: {
   // Send combined transaction
   console.log('[submitShieldedWithdrawSol] Sending combined transaction (fee + withdrawal)...');
   try {
-    const signature = await provider.sendAndConfirm(tx, [keypair]);
+    const { blockhash } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = keypair.publicKey;
+    tx.sign(keypair);
+    const signature = await connection.sendRawTransaction(tx.serialize());
+    await pollForConfirmation(connection, signature, 'submitShieldedWithdrawSol');
     console.log('[submitShieldedWithdrawSol] ✅ Combined transaction succeeded:', signature);
     return signature;
   } catch (err) {
