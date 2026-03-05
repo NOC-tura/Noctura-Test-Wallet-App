@@ -295,7 +295,29 @@ export async function collectPrivacyFee(keypair: Keypair): Promise<string> {
   
   try {
     console.log('[collectPrivacyFee] Sending transaction to blockchain...');
-    const signature = await provider.sendAndConfirm(tx, [keypair]);
+    // Use custom confirmation with 60 second timeout for slow devnet
+    const latestBlock = await connection.getLatestBlockhash();
+    tx.recentBlockhash = latestBlock.blockhash;
+    tx.feePayer = keypair.publicKey;
+    tx.sign(keypair);
+    
+    const signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 2,
+    });
+    
+    // Confirm with explicit timeout of 60 seconds
+    console.log('[collectPrivacyFee] Waiting for confirmation (up to 60s)...');
+    const confirmationResult = await connection.confirmTransaction({
+      signature,
+      blockhash: latestBlock.blockhash,
+      lastValidBlockHeight: latestBlock.lastValidBlockHeight,
+    }, 'confirmed');
+    
+    if (confirmationResult.value.err) {
+      throw new Error(`Transaction failed: ${JSON.stringify(confirmationResult.value.err)}`);
+    }
+    
     console.log('[collectPrivacyFee] ✅ Privacy fee collected successfully:', signature);
     console.log('[collectPrivacyFee] Fee of 0.25 NOC deducted from user account');
     return signature;
