@@ -524,8 +524,8 @@ export async function submitShieldedDeposit(params: {
 
       console.log('[submitShieldedDeposit] Calling transparentDepositSol instruction...');
 
-      // Call the on-chain instruction (transfers SOL and adds commitment to Merkle tree)
-      const signature = await program.methods
+      // Build the SOL deposit instruction
+      const solDepositIx = await program.methods
         .transparentDepositSol(commitment, nullifier, amount, Buffer.from(proofBytes), publicInputs)
         .accounts({
           payer: keypair.publicKey,
@@ -536,7 +536,21 @@ export async function submitShieldedDeposit(params: {
           solVault: solVaultPda,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .instruction();
+
+      // Request compute units for ZK proof verification
+      const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: 400_000,
+      });
+
+      // Build and send transaction with compute budget (SAME as NOC deposit)
+      const tx = new Transaction().add(computeBudgetIx).add(solDepositIx);
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = keypair.publicKey;
+      tx.sign(keypair);
+      const signature = await connection.sendRawTransaction(tx.serialize());
+      await pollForConfirmation(connection, signature, 'submitShieldedDeposit (SOL)');
 
       console.log('[submitShieldedDeposit] ✅ Native SOL deposit complete:', signature);
       return { signature, leafIndex };
