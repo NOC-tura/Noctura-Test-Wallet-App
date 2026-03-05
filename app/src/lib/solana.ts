@@ -27,16 +27,22 @@ async function pollForConfirmation(conn: Connection, signature: string, label: s
   let confirmed = false;
   let attempts = 0;
   const maxAttempts = 90; // 90 * 500ms = 45 second timeout
+  console.log(`[${label}] Starting confirmation polling for sig: ${signature.slice(0, 16)}...`);
   
   while (!confirmed && attempts < maxAttempts) {
     try {
       const status = await conn.getSignatureStatus(signature);
+      
+      if (attempts % 10 === 0) {
+        console.log(`[${label}] Poll attempt ${attempts}: status = ${status.value?.confirmationStatus || 'null'}`);
+      }
       
       if (status.value?.confirmationStatus === 'confirmed' || status.value?.confirmationStatus === 'finalized') {
         if (status.value.err) {
           throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
         }
         confirmed = true;
+        console.log(`[${label}] ✅ Confirmed in ${(attempts * 0.5).toFixed(1)}s`);
         break;
       }
       
@@ -44,7 +50,9 @@ async function pollForConfirmation(conn: Connection, signature: string, label: s
         throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
       }
     } catch (pollErr) {
-      // Ignore polling errors, retry
+      if (attempts % 20 === 0) {
+        console.log(`[${label}] Poll error at attempt ${attempts}:`, (pollErr as Error).message);
+      }
     }
     
     attempts++;
@@ -54,7 +62,7 @@ async function pollForConfirmation(conn: Connection, signature: string, label: s
   }
   
   if (!confirmed) {
-    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s`);
+    throw new Error(`${label}: Transaction not confirmed after ${(attempts * 0.5).toFixed(1)}s. Sig: ${signature}`);
   }
 }
 
