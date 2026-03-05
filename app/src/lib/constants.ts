@@ -26,20 +26,17 @@ export const SHIELD_PROGRAM_ID = readEnv('VITE_SHIELD_PROGRAM', '3KN2qrmEtPyk9WG
 // Helius API key for faster RPC
 const HELIUS_API_KEY = readEnv('VITE_HELIUS_API_KEY', '');
 
-// RPC URL - ALWAYS prefer Helius if API key is available (overrides VITE_SOLANA_RPC_URL)
-const buildTimeRpc = (globalThis as any).__HELIUS_URL__ as string | undefined;
-const heliusRpc = HELIUS_API_KEY 
-  ? `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
-  : null;
-const envRpc = readEnv('VITE_SOLANA_RPC_URL', '');
-export const HeliusRpcUrl = buildTimeRpc && buildTimeRpc.startsWith('http') 
-  ? buildTimeRpc 
-  : heliusRpc || envRpc || 'https://api.devnet.solana.com';
-
+// RPC URL - Now routes through prover service proxy to avoid CORS issues
 const buildTimeProver = (globalThis as any).__PROVER_URL__ as string | undefined;
-export const ProverServiceUrl = buildTimeProver && buildTimeProver.startsWith('http')
+const proverUrl = buildTimeProver && buildTimeProver.startsWith('http')
   ? buildTimeProver
   : readEnv('VITE_PROVER_URL', 'http://localhost:8787');
+
+// Frontend makes RPC calls through the prover service proxy (/rpc endpoint)
+// This avoids CORS issues that occur when calling Helius directly from the browser
+export const HeliusRpcUrl = `${proverUrl}/rpc`;
+
+export const ProverServiceUrl = proverUrl;
 
 export const INITIAL_AIRDROP_AMOUNT = 10_000;
 
@@ -55,7 +52,7 @@ export const RELAYER_ENDPOINTS = (() => {
 })();
 
 // Solana RPC endpoint - prefer Helius if API key is available
-export const SOLANA_RPC = heliusRpc || envRpc || 'https://api.devnet.solana.com';
+export const SOLANA_RPC = proverUrl + '/rpc';
 
 // Health check interval and timeout
 export const RELAYER_HEALTH_CHECK_INTERVAL_MS = 30_000; // 30 seconds

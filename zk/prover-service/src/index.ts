@@ -4,7 +4,7 @@ import { Connection, PublicKey, Transaction, TransactionInstruction, SystemProgr
 import * as spl from '@solana/spl-token';
 const splToken = spl as Record<string, any>;
 import bodyParser from 'body-parser';
-import { AUTHORITY, PORT, RPC_ENDPOINT, NOC_MINT, AIRDROP_LAMPORTS, FEE_COLLECTOR } from './config.js';
+import { AUTHORITY, PORT, RPC_ENDPOINT, NOC_MINT, AIRDROP_LAMPORTS, FEE_COLLECTOR, HELIUS_API_KEY } from './config.js';
 import { generateProof } from './snark.js';
 import { sendNocAirdrop } from './airdrop.js';
 import { relayWithdraw, relayTransfer, relayConsolidate, RelayWithdrawParams, RelayTransferParams, RelayConsolidateParams } from './relayer.js';
@@ -61,6 +61,38 @@ const connection = new Connection(RPC_ENDPOINT, 'confirmed');
 
 app.get('/health', (_: Request, res: Response) => {
   res.json({ ok: true, slot: Date.now() });
+});
+
+// ============================================
+// RPC PROXY: Forward RPC calls from frontend
+// ============================================
+// This solves CORS issues when frontend tries to call Helius directly
+// The frontend will call /rpc instead of https://devnet.helius-rpc.com/?api-key=...
+app.post('/rpc', async (req: Request, res: Response) => {
+  try {
+    const rpcPayload = req.body; // Should be a JSON-RPC 2.0 request
+    
+    // Determine which RPC endpoint to use
+    let actuallRpcUrl = RPC_ENDPOINT;
+    if (HELIUS_API_KEY && RPC_ENDPOINT.includes('helius')) {
+      actuallRpcUrl = `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+    }
+    
+    // Forward the RPC request to the backend RPC provider
+    const rpcResponse = await fetch(actuallRpcUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(rpcPayload),
+    });
+    
+    const result = await rpcResponse.json();
+    res.json(result);
+  } catch (err) {
+    console.error('[RPC Proxy] Error:', err);
+    res.status(400).json({ error: formatError(err), jsonrpc: '2.0', id: null });
+  }
 });
 
 app.post('/prove/:circuit', async (req: Request, res: Response) => {
