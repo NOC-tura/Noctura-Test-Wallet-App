@@ -57,7 +57,14 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
 
-const connection = new Connection(RPC_ENDPOINT, 'confirmed');
+// Initialize connection lazily (not on startup to avoid deploy timeout on free tier)
+let connection: Connection | null = null;
+function getConnection(): Connection {
+  if (!connection) {
+    connection = new Connection(RPC_ENDPOINT, 'confirmed');
+  }
+  return connection;
+}
 
 app.get('/health', (_: Request, res: Response) => {
   res.json({ ok: true, slot: Date.now() });
@@ -131,7 +138,7 @@ app.post('/airdrop', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Destination is required' });
     }
     const signature = await sendNocAirdrop(
-      connection,
+      getConnection(),
       AUTHORITY,
       new PublicKey(NOC_MINT),
       new PublicKey(destination),
@@ -154,7 +161,7 @@ app.post('/relay/withdraw', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required parameters: proof, amount, nullifier, recipientAta' });
     }
     console.log('[Relayer] Received withdrawal request, collectFee:', params.collectFee);
-    const signature = await relayWithdraw(connection, AUTHORITY, params, FEE_COLLECTOR);
+    const signature = await relayWithdraw(getConnection(), AUTHORITY, params, FEE_COLLECTOR);
     res.json({ signature });
   } catch (err) {
     console.error('[Relayer] Withdrawal failed:', err);
@@ -170,7 +177,7 @@ app.post('/relay/transfer', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required parameters: proof, nullifier, outputCommitment1, outputCommitment2' });
     }
     console.log('[Relayer] Received transfer request');
-    const signature = await relayTransfer(connection, AUTHORITY, params);
+    const signature = await relayTransfer(getConnection(), AUTHORITY, params);
     res.json({ signature });
   } catch (err) {
     console.error('[Relayer] Transfer failed:', err);
@@ -186,7 +193,7 @@ app.post('/relay/consolidate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required parameters: proof, publicInputs, inputNullifiers, outputCommitment' });
     }
     console.log('[Relayer] Received consolidation request, inputs:', params.inputNullifiers.length);
-    const signature = await relayConsolidate(connection, AUTHORITY, params);
+    const signature = await relayConsolidate(getConnection(), AUTHORITY, params);
     res.json({ signature });
   } catch (err) {
     console.error('[Relayer] Consolidation failed:', err);
@@ -221,11 +228,11 @@ app.post('/relay/memo', async (req: Request, res: Response) => {
     
     const tx = new Transaction().add(memoIx);
     tx.feePayer = AUTHORITY.publicKey;
-    const latestBlockhash = await connection.getLatestBlockhash();
+    const latestBlockhash = await getConnection().getLatestBlockhash();
     tx.recentBlockhash = latestBlockhash.blockhash;
     tx.sign(AUTHORITY);
     
-    const signature = await connection.sendRawTransaction(tx.serialize(), {
+    const signature = await getConnection().sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
       maxRetries: 3,
     });
@@ -385,7 +392,7 @@ app.post('/swap/execute', async (req: Request, res: Response) => {
       
       // Check if user has ATA
       try {
-        await splToken.getAccount(connection, userAta);
+        await splToken.getAccount(getConnection(), userAta);
       } catch {
         tx.add(splToken.createAssociatedTokenAccountInstruction(
           AUTHORITY.publicKey, userAta, userPubkeyObj, NOC_MINT_PUBKEY
@@ -397,12 +404,12 @@ app.post('/swap/execute', async (req: Request, res: Response) => {
     }
 
     tx.feePayer = AUTHORITY.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash } = await getConnection().getLatestBlockhash();
     tx.recentBlockhash = blockhash;
     tx.sign(AUTHORITY);
 
-    const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
-    await connection.confirmTransaction(signature, 'confirmed');
+    const signature = await getConnection().sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+    await getConnection().confirmTransaction(signature, 'confirmed');
 
     console.log(`[Swap] ✅ Sent ${outputAmount} ${outputToken} to ${walletAddress.slice(0, 8)}..., tx: ${signature}`);
     res.json({ 
@@ -423,11 +430,11 @@ app.post('/swap/execute', async (req: Request, res: Response) => {
 // GET /swap/liquidity - Check relayer liquidity
 app.get('/swap/liquidity', async (_req: Request, res: Response) => {
   try {
-    const solBalance = await connection.getBalance(AUTHORITY.publicKey) / LAMPORTS_PER_SOL;
+    const solBalance = await getConnection().getBalance(AUTHORITY.publicKey) / LAMPORTS_PER_SOL;
     let nocBalance = 0;
     try {
       const ata = splToken.getAssociatedTokenAddressSync(NOC_MINT_PUBKEY, AUTHORITY.publicKey);
-      const account = await splToken.getAccount(connection, ata);
+      const account = await splToken.getAccount(getConnection(), ata);
       nocBalance = Number(account.amount) / 1_000_000;
     } catch {}
     
@@ -446,7 +453,7 @@ app.get('/swap/liquidity', async (_req: Request, res: Response) => {
 // Relay health endpoint (for relayer manager)
 app.get('/relay/health', async (_req: Request, res: Response) => {
   try {
-    const balance = await connection.getBalance(AUTHORITY.publicKey);
+    const balance = await getConnection().getBalance(AUTHORITY.publicKey);
     res.json({
       status: 'healthy',
       feePayerBalance: balance / LAMPORTS_PER_SOL,
