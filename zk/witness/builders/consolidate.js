@@ -3,8 +3,11 @@ export function serializeConsolidateWitness({
   merkleProofs,
   outputNote,
 }) {
-  if (inputNotes.length === 0 || inputNotes.length > 8) {
-    throw new Error(`Consolidate circuit supports 1-8 input notes, got ${inputNotes.length}`);
+  const MAX_INPUTS = 8;
+  const TREE_HEIGHT = 20;
+
+  if (inputNotes.length === 0 || inputNotes.length > MAX_INPUTS) {
+    throw new Error(`Consolidate circuit supports 1-${MAX_INPUTS} input notes, got ${inputNotes.length}`);
   }
 
   if (inputNotes.length !== merkleProofs.length) {
@@ -34,18 +37,59 @@ export function serializeConsolidateWitness({
     );
   }
 
+  // Pad input arrays to MAX_INPUTS (8) with zeros
+  // CRITICAL: The circuit is compiled with Consolidate(8), so it expects exactly 8 values
+  const paddedSecrets = [];
+  const paddedAmounts = [];
+  const paddedBlindings = [];
+  const paddedRhos = [];
+  const paddedNullifiers = [];
+  
+  // Add real values
+  for (let i = 0; i < inputNotes.length; i++) {
+    paddedSecrets[i] = inputNotes[i].secret.toString();
+    paddedAmounts[i] = inputNotes[i].amount.toString();
+    paddedBlindings[i] = inputNotes[i].blinding.toString();
+    paddedRhos[i] = inputNotes[i].rho.toString();
+    paddedNullifiers[i] = inputNotes[i].nullifier.toString();
+  }
+  
+  // Fill remaining slots with zeros
+  for (let i = inputNotes.length; i < MAX_INPUTS; i++) {
+    paddedSecrets[i] = '0';
+    paddedAmounts[i] = '0';
+    paddedBlindings[i] = '0';
+    paddedRhos[i] = '0';
+    paddedNullifiers[i] = '0';
+  }
+
+  // Pad merkle proofs to MAX_INPUTS (8) with zero-filled proofs
+  const paddedPathElements = [];
+  const paddedPathIndices = [];
+  
+  for (let i = 0; i < merkleProofs.length; i++) {
+    paddedPathElements[i] = merkleProofs[i].pathElements.map((x) => x.toString());
+    paddedPathIndices[i] = merkleProofs[i].pathIndices.map((x) => x.toString());
+  }
+  
+  // Fill remaining merkle proof slots with zero arrays
+  for (let i = merkleProofs.length; i < MAX_INPUTS; i++) {
+    paddedPathElements[i] = Array(TREE_HEIGHT).fill('0');
+    paddedPathIndices[i] = Array(TREE_HEIGHT).fill('0');
+  }
+
   return {
-    inSecrets: inputNotes.map((n) => n.secret.toString()),
-    inAmounts: inputNotes.map((n) => n.amount.toString()),
+    inSecrets: paddedSecrets,
+    inAmounts: paddedAmounts,
     tokenMint: firstTokenMint.toString(),
-    blindings: inputNotes.map((n) => n.blinding.toString()),
-    rhos: inputNotes.map((n) => n.rho.toString()),
-    pathElements: merkleProofs.map((p) => p.pathElements.map((x) => x.toString())),
-    pathIndices: merkleProofs.map((p) => p.pathIndices.map((x) => x.toString())),
+    blindings: paddedBlindings,
+    rhos: paddedRhos,
+    pathElements: paddedPathElements,
+    pathIndices: paddedPathIndices,
     merkleRoot: merkleProofs[0].root.toString(),
     outSecret: outputNote.secret.toString(),
     outBlinding: outputNote.blinding.toString(),
-    nullifiers: inputNotes.map((n) => n.nullifier.toString()),
+    nullifiers: paddedNullifiers,
   };
 }
 
