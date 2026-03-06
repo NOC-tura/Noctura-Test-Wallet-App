@@ -304,7 +304,8 @@ export async function isShieldedPoolAvailable(): Promise<boolean> {
 
 /**
  * Check if we should use the on-chain shielded pool for TRUE private swaps.
- * Returns true if pool is available, has good rates, and swap verifier is set.
+ * Returns true if pool is available and has liquidity.
+ * Rate deviation checks are NOT applied - users accept the pool rate for privacy.
  */
 export async function shouldUseShieldedPool(): Promise<boolean> {
   // Check if pool exists and has liquidity
@@ -314,18 +315,11 @@ export async function shouldUseShieldedPool(): Promise<boolean> {
     return false;
   }
 
-  // Check pool rate is within acceptable range of market rate (283 NOC/SOL)
+  // Log pool rate for transparency (but don't block swaps based on it)
   const reserves = await getPoolReserves();
   if (reserves) {
     const poolRatio = Number(reserves.nocReserve) / Number(reserves.solReserve) * 1000; // NOC per 1 SOL
-    const marketRatio = 283;
-    const deviation = Math.abs(poolRatio - marketRatio) / marketRatio;
-    
-    if (deviation > 0.10) { // More than 10% off market rate
-      console.log('[ShieldedPool] Pool rate', poolRatio.toFixed(0), 'NOC/SOL deviates', (deviation * 100).toFixed(1), '% from market', marketRatio, '- using fallback');
-      return false;
-    }
-    console.log('[ShieldedPool] Pool rate', poolRatio.toFixed(0), 'NOC/SOL is within', (deviation * 100).toFixed(1), '% of market');
+    console.log('[ShieldedPool] Pool rate:', poolRatio.toFixed(0), 'NOC/SOL');
   }
 
   // Check if swap verifier is set up
