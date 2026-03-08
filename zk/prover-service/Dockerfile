@@ -40,18 +40,29 @@ RUN which prover && prover --help || echo "RapidSNARK prover installed"
 # Set up application
 WORKDIR /app
 
-# Copy package files first for better caching
-COPY package*.json ./
+# Copy package files first for better caching (now from prover-service subfolder)
+COPY prover-service/package*.json ./
 RUN npm install --include=dev
 
-# Copy source code
-COPY . .
+# Copy prover-service source code
+COPY prover-service/ .
 
 # Build TypeScript
 RUN npm run build
 
-# Download ZK artifacts (keys and wasm files)
-RUN bash scripts/download-artifacts.sh
+# Copy ZK artifacts from repo (tracked via Git LFS)
+# Keys are in zk/keys, builds are in zk/build
+RUN mkdir -p ../keys
+COPY keys/*.zkey ../keys/
+COPY keys/*.vkey.json ../keys/
+
+# Copy wasm build folders
+RUN mkdir -p ../build/deposit ../build/consolidate ../build/transfer ../build/withdraw ../build/swap_v2
+COPY build/deposit/deposit_js ../build/deposit/deposit_js
+COPY build/consolidate/consolidate_js ../build/consolidate/consolidate_js
+COPY build/transfer/transfer_js ../build/transfer/transfer_js
+COPY build/withdraw/withdraw_js ../build/withdraw/withdraw_js
+COPY build/swap_v2/swap_v2_js ../build/swap_v2/swap_v2_js
 
 # Set environment variables
 ENV NODE_ENV=production

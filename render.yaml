@@ -4,8 +4,8 @@ services:
     runtime: docker
     region: oregon
     plan: starter
-    rootDir: zk/prover-service
-    dockerfilePath: ./Dockerfile
+    rootDir: zk
+    dockerfilePath: ./prover-service/Dockerfile
     numInstances: 1
     healthCheckPath: /health
     envVars:
