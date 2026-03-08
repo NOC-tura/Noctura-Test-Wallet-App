@@ -116,6 +116,81 @@ pub mod noctura_shield {
         Ok(())
     }
 
+    /// Set swap V2 verifier (for partial swaps with change)
+    pub fn set_swap_v2_verifier(ctx: Context<SetSwapV2Verifier>, verifying_key: Vec<u8>) -> Result<()> {
+        validate_verifier_key_blob(&verifying_key)?;
+        ctx.accounts.swap_v2_verifier.verifying_key = verifying_key;
+        msg!("Swap V2 verifier set");
+        Ok(())
+    }
+
+    /// Initialize swap V2 verifier for chunked upload
+    pub fn init_swap_v2_verifier_chunked(ctx: Context<InitSwapV2VerifierChunked>) -> Result<()> {
+        ctx.accounts.swap_v2_verifier.verifying_key = Vec::new();
+        msg!("Swap V2 verifier initialized for chunked upload");
+        Ok(())
+    }
+
+    /// Append chunk to swap V2 verifier
+    pub fn append_swap_v2_verifier_chunk(ctx: Context<AppendSwapV2VerifierChunk>, chunk: Vec<u8>) -> Result<()> {
+        let chunk_len = chunk.len();
+        ctx.accounts.swap_v2_verifier.verifying_key.extend(chunk);
+        msg!("Appended {} bytes to swap V2 verifier, total: {}", chunk_len, ctx.accounts.swap_v2_verifier.verifying_key.len());
+        Ok(())
+    }
+
+    /// Finalize swap V2 verifier
+    pub fn finalize_swap_v2_verifier(ctx: Context<FinalizeSwapV2Verifier>) -> Result<()> {
+        validate_verifier_key_blob(&ctx.accounts.swap_v2_verifier.verifying_key)?;
+        msg!("Swap V2 verifier finalized with {} bytes", ctx.accounts.swap_v2_verifier.verifying_key.len());
+        Ok(())
+    }
+
+    /// Initialize consolidate verifier for chunked upload
+    pub fn init_consolidate_verifier_chunked(ctx: Context<InitConsolidateVerifierChunked>) -> Result<()> {
+        ctx.accounts.consolidate_verifier.verifying_key = Vec::new();
+        msg!("Consolidate verifier initialized for chunked upload");
+        Ok(())
+    }
+
+    /// Append chunk to consolidate verifier
+    pub fn append_consolidate_verifier_chunk(ctx: Context<AppendConsolidateVerifierChunk>, chunk: Vec<u8>) -> Result<()> {
+        let chunk_len = chunk.len();
+        ctx.accounts.consolidate_verifier.verifying_key.extend(chunk);
+        msg!("Appended {} bytes to consolidate verifier, total: {}", chunk_len, ctx.accounts.consolidate_verifier.verifying_key.len());
+        Ok(())
+    }
+
+    /// Finalize consolidate verifier
+    pub fn finalize_consolidate_verifier(ctx: Context<FinalizeConsolidateVerifier>) -> Result<()> {
+        validate_verifier_key_blob(&ctx.accounts.consolidate_verifier.verifying_key)?;
+        msg!("Consolidate verifier finalized with {} bytes", ctx.accounts.consolidate_verifier.verifying_key.len());
+        Ok(())
+    }
+
+    /// Shielded consolidation: merge multiple notes into one using consolidate circuit
+    pub fn shielded_consolidate(
+        ctx: Context<ShieldedConsolidate>,
+        input_nullifiers: Vec<[u8; 32]>,
+        output_commitment: [u8; 32],
+        proof: Vec<u8>,
+        public_inputs: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        require!(!input_nullifiers.is_empty(), ShieldError::InvalidAmount);
+        verify_groth16(&ctx.accounts.consolidate_verifier, &proof, &public_inputs)?;
+
+        let nullifier_count = input_nullifiers.len();
+        for nullifier in input_nullifiers {
+            track_nullifier(&mut ctx.accounts.nullifier_set, nullifier)?;
+            emit!(NullifierConsumed { nullifier });
+        }
+
+        let _root = ctx.accounts.merkle_tree.append_leaf(output_commitment)?;
+        msg!("Consolidated {} notes into 1", nullifier_count);
+
+        Ok(())
+    }
+
     /// Admin function to update shield fee (in basis points)
     pub fn set_fee(ctx: Context<SetFee>, shield_fee_bps: u16, priority_fee_bps: u16) -> Result<()> {
         let global = &mut ctx.accounts.global_state;
@@ -594,6 +669,78 @@ pub mod noctura_shield {
         Ok(())
     }
 
+    /// Execute a shielded swap V2 - supports partial swaps with change
+    /// User swaps some amount, receives output token + change in same token
+    /// No tokens leave the shielded system!
+    pub fn shielded_pool_swap_v2(
+        ctx: Context<ShieldedPoolSwapV2>,
+        swap_amount: u64,          // Amount being swapped (not full note amount)
+        min_output_amount: u64,
+        input_is_sol: bool,        // true = SOL->NOC, false = NOC->SOL
+        input_nullifier: [u8; 32],
+        output_commitment: [u8; 32],  // Swapped token commitment
+        change_commitment: [u8; 32],  // Change commitment (same token as input)
+        proof: Vec<u8>,
+        public_inputs: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        require!(swap_amount > 0, ShieldError::InvalidAmount);
+
+        // Verify ZK proof (swap_v2 circuit)
+        verify_groth16(&ctx.accounts.swap_v2_verifier, &proof, &public_inputs)?;
+
+        // Track nullifier (prevents double-spend)
+        track_nullifier(&mut ctx.accounts.nullifier_set, input_nullifier)?;
+
+        let pool = &mut ctx.accounts.shielded_pool;
+        require!(pool.enabled, ShieldError::InvalidAmount);
+
+        // Calculate output using AMM formula (based on swap_amount, not full note)
+        let output_amount = pool.calculate_output(swap_amount, input_is_sol)
+            .ok_or(error!(ShieldError::InvalidAmount))?;
+
+        // Slippage check
+        require!(output_amount >= min_output_amount, ShieldError::InvalidAmount);
+
+        // Update pool reserves (only swap_amount affects the pool)
+        if input_is_sol {
+            pool.sol_reserve = pool.sol_reserve.checked_add(swap_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.noc_reserve = pool.noc_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        } else {
+            pool.noc_reserve = pool.noc_reserve.checked_add(swap_amount)
+                .ok_or(error!(ShieldError::CapacityExceeded))?;
+            pool.sol_reserve = pool.sol_reserve.checked_sub(output_amount)
+                .ok_or(error!(ShieldError::InvalidAmount))?;
+        }
+
+        // Add BOTH output commitments to Merkle tree
+        // First: swapped token commitment
+        let _root1 = ctx.accounts.merkle_tree.append_leaf(output_commitment)?;
+        // Second: change commitment (same token as input)
+        let _root2 = ctx.accounts.merkle_tree.append_leaf(change_commitment)?;
+
+        emit!(ShieldedSwapV2Executed {
+            input_nullifier,
+            output_commitment,
+            change_commitment,
+            is_noc_to_sol: !input_is_sol,
+            swap_amount,
+            output_amount,
+        });
+
+        emit!(NullifierConsumed { nullifier: input_nullifier });
+
+        msg!("Shielded swap V2: {} {} -> {} {} + change", 
+            swap_amount, 
+            if input_is_sol { "SOL" } else { "NOC" },
+            output_amount,
+            if input_is_sol { "NOC" } else { "SOL" }
+        );
+
+        Ok(())
+    }
+
     /// Get pool reserves (view function)
     pub fn get_pool_reserves(ctx: Context<GetPoolReserves>) -> Result<()> {
         let pool = &ctx.accounts.shielded_pool;
@@ -1056,6 +1203,8 @@ pub struct PartialWithdraw<'info> {
 
 const SHIELDED_POOL_SEED: &[u8] = b"shielded-pool";
 const SWAP_VERIFIER_SEED: &[u8] = b"swap-verifier";
+const SWAP_V2_VERIFIER_SEED: &[u8] = b"swap-v2-verifier";
+const CONSOLIDATE_VERIFIER_SEED: &[u8] = b"consolidate-verifier";
 
 #[derive(Accounts)]
 pub struct InitializeShieldedPool<'info> {
@@ -1127,6 +1276,23 @@ pub struct ShieldedPoolSwap<'info> {
     pub nullifier_set: Account<'info, NullifierSetAccount>,
     #[account(seeds = [SWAP_VERIFIER_SEED], bump)]
     pub swap_verifier: Account<'info, VerifierAccount>,
+}
+
+/// Accounts for swap V2 - supports partial swaps with change
+#[derive(Accounts)]
+pub struct ShieldedPoolSwapV2<'info> {
+    #[account(
+        mut,
+        seeds = [SHIELDED_POOL_SEED],
+        bump = shielded_pool.bump
+    )]
+    pub shielded_pool: Account<'info, ShieldedPool>,
+    #[account(mut, seeds = [TREE_SEED], bump)]
+    pub merkle_tree: Account<'info, MerkleTreeAccount>,
+    #[account(mut, seeds = [NULLIFIER_SEED], bump)]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
+    #[account(seeds = [SWAP_V2_VERIFIER_SEED], bump)]
+    pub swap_v2_verifier: Account<'info, VerifierAccount>,
 }
 
 #[derive(Accounts)]
@@ -1259,4 +1425,138 @@ pub struct FinalizeSwapVerifier<'info> {
         bump
     )]
     pub swap_verifier: Account<'info, VerifierAccount>,
+}
+
+// ============================================
+// SWAP V2 VERIFIER ACCOUNT STRUCTURES
+// ============================================
+
+#[derive(Accounts)]
+pub struct SetSwapV2Verifier<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = VerifierAccount::space(),
+        seeds = [SWAP_V2_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_v2_verifier: Account<'info, VerifierAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitSwapV2VerifierChunked<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = VerifierAccount::space(),
+        seeds = [SWAP_V2_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_v2_verifier: Account<'info, VerifierAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AppendSwapV2VerifierChunk<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        mut,
+        seeds = [SWAP_V2_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_v2_verifier: Account<'info, VerifierAccount>,
+}
+
+#[derive(Accounts)]
+pub struct FinalizeSwapV2Verifier<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        seeds = [SWAP_V2_VERIFIER_SEED],
+        bump
+    )]
+    pub swap_v2_verifier: Account<'info, VerifierAccount>,
+}
+
+// ============================================
+// CONSOLIDATE VERIFIER ACCOUNT STRUCTURES
+// ============================================
+
+#[derive(Accounts)]
+pub struct InitConsolidateVerifierChunked<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = VerifierAccount::space(),
+        seeds = [CONSOLIDATE_VERIFIER_SEED],
+        bump
+    )]
+    pub consolidate_verifier: Account<'info, VerifierAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AppendConsolidateVerifierChunk<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        mut,
+        seeds = [CONSOLIDATE_VERIFIER_SEED],
+        bump
+    )]
+    pub consolidate_verifier: Account<'info, VerifierAccount>,
+}
+
+#[derive(Accounts)]
+pub struct FinalizeConsolidateVerifier<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [GLOBAL_STATE_SEED], bump = global_state.bump)]
+    pub global_state: Account<'info, GlobalState>,
+    #[account(
+        seeds = [CONSOLIDATE_VERIFIER_SEED],
+        bump
+    )]
+    pub consolidate_verifier: Account<'info, VerifierAccount>,
+}
+
+#[derive(Accounts)]
+pub struct ShieldedConsolidate<'info> {
+    #[account(
+        mut,
+        seeds = [TREE_SEED],
+        bump
+    )]
+    pub merkle_tree: Account<'info, MerkleTreeAccount>,
+    #[account(
+        mut,
+        seeds = [NULLIFIER_SEED],
+        bump
+    )]
+    pub nullifier_set: Account<'info, NullifierSetAccount>,
+    #[account(
+        seeds = [CONSOLIDATE_VERIFIER_SEED],
+        bump
+    )]
+    pub consolidate_verifier: Account<'info, VerifierAccount>,
 }

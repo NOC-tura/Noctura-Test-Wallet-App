@@ -8,4 +8,5 @@ export * from './builders/withdraw';
 export * from './builders/partial_withdraw';
 export * from './builders/consolidate';
 export * from './builders/swap';
+export * from './builders/swap_v2';
 export * from './serialization';

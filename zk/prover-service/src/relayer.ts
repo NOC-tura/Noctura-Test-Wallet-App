@@ -149,6 +149,10 @@ function deriveShieldPdas(mint: PublicKey = NOC_MINT) {
     [Buffer.from('transfer-verifier')],
     PROGRAM_ID
   );
+  const [consolidateVerifier] = PublicKey.findProgramAddressSync(
+    [Buffer.from('consolidate-verifier')],
+    PROGRAM_ID
+  );
   const [vaultAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from('vault-authority'), mint.toBuffer()],
     PROGRAM_ID
@@ -165,6 +169,7 @@ function deriveShieldPdas(mint: PublicKey = NOC_MINT) {
     verifier,
     withdrawVerifier,
     transferVerifier,
+    consolidateVerifier,
     vaultAuthority,
     vaultTokenAccount,
   };
@@ -826,18 +831,18 @@ export async function relayConsolidate(
   console.log('[Relayer] Proof bytes length:', proofBytes.length);
   console.log('[Relayer] Public inputs count:', publicInputsArr.length);
 
-  // Build transaction - consolidation uses shieldedTransfer with multiple inputs, 1 output
+  // Build transaction - consolidation uses shieldedConsolidate with consolidate verifier
   const ix = await program.methods
-    .shieldedTransfer(
+    .shieldedConsolidate(
       nullifierBytesArr,
-      [outputCommitmentBytes], // Single output for consolidation
+      outputCommitmentBytes, // Single output commitment (not an array)
       Buffer.from(proofBytes),
       publicInputsArr
     )
     .accounts({
       merkleTree: pdas.merkleTree,
       nullifierSet: pdas.nullifierSet,
-      transferVerifier: pdas.transferVerifier,
+      consolidateVerifier: pdas.consolidateVerifier,
     })
     .instruction();
 

@@ -15,6 +15,10 @@ include "./merkle.circom";
  * Circuit only proves note ownership and valid commitment construction.
  * 
  * Input token and output token can be DIFFERENT (that's the point of swap!)
+ * 
+ * NOTE: Current circuit swaps the ENTIRE input note. User types desired amount,
+ * but the full note value is swapped. For partial swaps with change, we would
+ * need a new circuit version with 2 outputs (swapped token + change).
  */
 template ShieldedSwap() {
     var TREE_HEIGHT = 20;

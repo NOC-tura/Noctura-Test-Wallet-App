@@ -25,11 +25,11 @@ import {
 import { getAssociatedTokenAddressSync, createTransferInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { NOC_TOKEN_MINT, WSOL_MINT, SOLANA_RPC, RELAYER_ADDRESS } from './constants';
 import { getSwapQuote, formatQuoteForDisplay, SwapQuote } from './relayerSwap';
-import { proveCircuit, ProverResponse } from './prover';
+import { proveCircuit, ProverResponse, relayTransfer } from './prover';
 import { submitShieldedDeposit, submitShieldedWithdraw, submitShieldedWithdrawSol, submitShieldedTransfer, relayConsolidate, PRIVACY_FEE_ATOMS, base64ToBytes } from './shieldProgram';
 import { buildMerkleProof } from './merkle';
 import { pubkeyToField, prepareDeposit, snapshotNote, createNoteFromSecrets, EXPECTED_NOC_TOKEN_MINT_FIELD, EXPECTED_SOL_TOKEN_MINT_FIELD, randomScalar } from './shield';
-import { serializeWithdrawWitness, serializeDepositWitness, serializeSwapWitness, createNote } from '@zk-witness/index';
+import { serializeWithdrawWitness, serializeDepositWitness, serializeSwapWitness, serializeSwapV2Witness, serializeTransferWitness, createNote } from '@zk-witness/index';
 import type { Note } from '@zk-witness/index';
 import { ShieldedNoteRecord } from '../types/shield';
 import { getTokenBalance, getSolBalance } from './solana';
@@ -39,7 +39,8 @@ import {
   getPoolReserves, 
   getShieldedPoolQuote,
   calculateSwapOutput,
-  executeShieldedPoolSwap 
+  executeShieldedPoolSwap,
+  executeShieldedPoolSwapV2
 } from './shieldedPool';
 
 const NOC_DECIMALS = 6;
@@ -71,6 +72,8 @@ export interface ShieldedSwapResult {
   inputAmount: string;
   outputAmount: string;
   outputNote?: ShieldedNoteRecord;
+  changeNote?: ShieldedNoteRecord; // Remaining input token (for fee collection)
+  changeAmount?: string; // Change amount as string
   error?: string;
 }
 
@@ -112,11 +115,13 @@ export async function executeShieldedSwap(
     const useShieldedPool = await shouldUseShieldedPool();
     
     if (useShieldedPool) {
-      console.log('[ShieldedSwap] 🔒 Using TRUE PRIVATE mode (shielded pool)');
+      console.log('[ShieldedSwap] 🔒 Using TRUE PRIVATE mode (shielded pool with swap_v2)');
       onStatusUpdate('🔒 TRUE PRIVATE swap mode - tokens stay shielded');
       
       // ============================================
-      // TRUE PRIVATE SWAP - Auto-consolidate if needed
+      // TRUE PRIVATE SWAP V2 - Supports ANY amount from a note
+      // User can swap X from a note of Y where X <= Y
+      // Receives: swapped tokens + change (Y - X)
       // ============================================
       
       const relevantNotes = shieldedNotes.filter(n => 
@@ -129,83 +134,85 @@ export async function executeShieldedSwap(
         throw new Error(`No shielded ${fromToken} notes available`);
       }
 
-      // Look for exact-match note (within 1% tolerance)
-      const exactMatchNote = relevantNotes.find(n => {
-        const noteAmount = BigInt(n.amount);
-        const diff = noteAmount > amountAtoms ? noteAmount - amountAtoms : amountAtoms - noteAmount;
-        const tolerance = amountAtoms / 100n; // 1% tolerance
-        return diff <= tolerance;
-      });
+      // Find a note with enough balance for the swap
+      const sortedNotes = [...relevantNotes].sort((a, b) => 
+        Number(BigInt(b.amount) - BigInt(a.amount))
+      );
+      
+      const suitableNote = sortedNotes.find(n => BigInt(n.amount) >= amountAtoms);
 
-      let inputNote: ShieldedNoteRecord;
-      let exactInputAmount: bigint;
-      let updatedShieldedNotes = [...shieldedNotes];
-
-      if (exactMatchNote) {
-        // Perfect! Use exact-match note directly
-        console.log('[ShieldedSwap] Found exact-match note:', exactMatchNote.amount);
-        inputNote = exactMatchNote;
-        exactInputAmount = BigInt(inputNote.amount);
-      } else {
-        // No exact-match - check if consolidation callback is available
+      // If no single note large enough, auto-consolidate first
+      let finalNote: ShieldedNoteRecord;
+      
+      if (!suitableNote) {
         const totalAvailable = relevantNotes.reduce((sum, n) => sum + BigInt(n.amount), 0n);
+        const largestNote = sortedNotes[0] ? BigInt(sortedNotes[0].amount) : 0n;
+        const largestDisplay = (Number(largestNote) / Math.pow(10, inputDecimals)).toFixed(2);
+        const swapAmountDisplay = (Number(amountAtoms) / Math.pow(10, inputDecimals)).toFixed(2);
+        const totalDisplay = (Number(totalAvailable) / Math.pow(10, inputDecimals)).toFixed(2);
         
+        // Check if total across all notes is enough
         if (totalAvailable < amountAtoms) {
-          const totalAvailableDisplay = (Number(totalAvailable) / Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS)).toFixed(2);
-          const swapAmountDisplay = (Number(amountAtoms) / Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS)).toFixed(2);
-          throw new Error(`Insufficient shielded ${fromToken}. Have ${totalAvailableDisplay}, need ${swapAmountDisplay}`);
-        }
-
-        // We have enough across multiple notes - auto-consolidate if callback available
-        if (!onConsolidateNotes) {
-          const totalAvailableDisplay = (Number(totalAvailable) / Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS)).toFixed(2);
-          const swapAmountDisplay = (Number(amountAtoms) / Math.pow(10, fromToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS)).toFixed(2);
           throw new Error(
-            `Consolidation required but no consolidation handler available. ` +
-            `Have ${totalAvailableDisplay} ${fromToken} across ${relevantNotes.length} notes, need ${swapAmountDisplay} to swap.`
+            `Insufficient ${fromToken} balance. You have ${totalDisplay} ${fromToken} ` +
+            `but need ${swapAmountDisplay} ${fromToken} for this swap.`
           );
         }
-
-        console.log('[ShieldedSwap] Auto-consolidating', relevantNotes.length, 'notes for swap...');
-        onStatusUpdate(`Consolidating ${relevantNotes.length} notes for swap... (this takes ~1-2 min)`);
-
-        try {
-          const consolidatedNotes = await onConsolidateNotes(relevantNotes);
-          console.log('[ShieldedSwap] Auto-consolidation complete', consolidatedNotes.length, 'consolidated notes');
-          
-          // Update our notes list with consolidated notes
-          updatedShieldedNotes = updatedShieldedNotes.filter(n => !relevantNotes.find(rn => rn.nullifier === n.nullifier));
-          updatedShieldedNotes.push(...consolidatedNotes);
-
-          // Find an exact-match among consolidated notes
-          const consolidatedExactMatch = consolidatedNotes.find(n => {
-            const noteAmount = BigInt(n.amount);
-            const diff = noteAmount > amountAtoms ? noteAmount - amountAtoms : amountAtoms - noteAmount;
-            const tolerance = amountAtoms / 100n;
-            return diff <= tolerance;
-          });
-
-          if (consolidatedExactMatch) {
-            inputNote = consolidatedExactMatch;
-            exactInputAmount = BigInt(inputNote.amount);
-            console.log('[ShieldedSwap] Using consolidated note:', inputNote.amount);
-          } else {
-            // Use largest consolidated note (should be all the amount we need)
-            const largestConsolidated = consolidatedNotes.reduce((largest, n) => 
-              BigInt(n.amount) > BigInt(largest.amount) ? n : largest
-            );
-            inputNote = largestConsolidated;
-            exactInputAmount = BigInt(inputNote.amount);
-            console.log('[ShieldedSwap] Using largest consolidated note:', inputNote.amount);
-          }
-        } catch (consolidateErr) {
-          const errorMsg = consolidateErr instanceof Error ? consolidateErr.message : String(consolidateErr);
-          console.error('[ShieldedSwap] Auto-consolidation failed:', errorMsg);
-          throw new Error(`Auto-consolidation failed: ${errorMsg}`);
+        
+        // Check if we have consolidation callback
+        if (!onConsolidateNotes) {
+          throw new Error(
+            `No single note large enough. Your largest note is ${largestDisplay} ${fromToken}, ` +
+            `but swap needs ${swapAmountDisplay} ${fromToken}. ` +
+            `Total across ${relevantNotes.length} notes: ${totalDisplay} ${fromToken}. ` +
+            `Auto-consolidation not available.`
+          );
         }
+        
+        // Select notes to consolidate (enough to cover the swap amount)
+        console.log(`[ShieldedSwap] Auto-consolidating notes to cover ${swapAmountDisplay} ${fromToken}...`);
+        onStatusUpdate(`🔄 Auto-consolidating ${relevantNotes.length} notes...`);
+        
+        // Select notes greedily until we have enough
+        const notesToConsolidate: ShieldedNoteRecord[] = [];
+        let accumulatedAmount = 0n;
+        for (const note of sortedNotes) {
+          notesToConsolidate.push(note);
+          accumulatedAmount += BigInt(note.amount);
+          if (accumulatedAmount >= amountAtoms) {
+            break;
+          }
+        }
+        
+        console.log(`[ShieldedSwap] Consolidating ${notesToConsolidate.length} notes with total ${(Number(accumulatedAmount) / Math.pow(10, inputDecimals)).toFixed(2)} ${fromToken}`);
+        
+        // Call consolidation callback - this will generate proofs and submit to relayer
+        const consolidatedNotes = await onConsolidateNotes(notesToConsolidate);
+        
+        if (!consolidatedNotes || consolidatedNotes.length === 0) {
+          throw new Error('Consolidation failed - no consolidated notes returned');
+        }
+        
+        // Use the first consolidated note (should be large enough now)
+        finalNote = consolidatedNotes[0];
+        console.log(`[ShieldedSwap] ✅ Consolidation complete. Using note with ${(Number(BigInt(finalNote.amount)) / Math.pow(10, inputDecimals)).toFixed(2)} ${fromToken}`);
+        onStatusUpdate('✅ Notes consolidated! Continuing with swap...');
+      } else {
+        finalNote = suitableNote;
       }
 
-      // Step 2: Get pool reserves and calculate output
+      const noteAmount = BigInt(finalNote.amount);
+      const swapAmount = amountAtoms; // User's requested swap amount
+      const changeAmount = noteAmount - swapAmount; // Remainder goes back as change
+      
+      const swapDisplay = (Number(swapAmount) / Math.pow(10, inputDecimals)).toFixed(2);
+      const changeDisplay = (Number(changeAmount) / Math.pow(10, inputDecimals)).toFixed(2);
+      console.log(`[ShieldedSwap] Using note: ${(Number(noteAmount) / Math.pow(10, inputDecimals)).toFixed(2)} ${fromToken}`);
+      console.log(`[ShieldedSwap] Swap: ${swapDisplay} ${fromToken}, Change: ${changeDisplay} ${fromToken}`);
+      
+      onStatusUpdate(`Swapping ${swapDisplay} ${fromToken}...`);
+
+      // Step 1: Get pool reserves and calculate output
       onStatusUpdate('Calculating swap output...');
       const reserves = await getPoolReserves();
       if (!reserves) {
@@ -213,23 +220,25 @@ export async function executeShieldedSwap(
       }
 
       const inputIsNoc = fromToken === 'NOC';
-      // Use exact note amount for calculation
-      const outputAmount = calculateSwapOutput(exactInputAmount, inputIsNoc, reserves);
+      // Calculate output based on swap amount (not full note)
+      const outputAmount = calculateSwapOutput(swapAmount, inputIsNoc, reserves);
       const minOutputAmount = outputAmount * BigInt(10000 - slippageBps) / 10000n;
 
       const outputDecimals = toToken === 'SOL' ? SOL_DECIMALS : NOC_DECIMALS;
       console.log('[ShieldedSwap] Pool quote:', {
-        input: exactInputAmount.toString(),
+        swapAmount: swapAmount.toString(),
         output: outputAmount.toString(),
         minOutput: minOutputAmount.toString(),
       });
 
-      // Step 3: Create output note
+      // Step 2: Create output notes (swapped token + change)
+      const inTokenMint = fromToken === 'SOL' ? BigInt(EXPECTED_SOL_TOKEN_MINT_FIELD) : BigInt(EXPECTED_NOC_TOKEN_MINT_FIELD);
       const outTokenMint = toToken === 'SOL' ? BigInt(EXPECTED_SOL_TOKEN_MINT_FIELD) : BigInt(EXPECTED_NOC_TOKEN_MINT_FIELD);
+      
+      // Output note (swapped token)
       const outSecret = randomScalar();
       const outBlinding = randomScalar();
       const outRho = randomScalar();
-      
       const outputNote = createNote({
         secret: outSecret,
         amount: outputAmount,
@@ -237,99 +246,127 @@ export async function executeShieldedSwap(
         blinding: outBlinding,
         rho: outRho,
       });
+      
+      // Change note (same token as input)
+      const changeSecret = randomScalar();
+      const changeBlinding = randomScalar();
+      const changeRho = randomScalar();
+      const changeNote = createNote({
+        secret: changeSecret,
+        amount: changeAmount,
+        tokenMint: inTokenMint,
+        blinding: changeBlinding,
+        rho: changeRho,
+      });
 
-      // Step 4: Build merkle proof for input note
+      // Step 3: Build merkle proof for input note
       onStatusUpdate('Building merkle proof...');
-      const allUnspent = updatedShieldedNotes.filter(n => n.owner === walletAddress && !n.spent);
-      const merkleProof = buildMerkleProof(allUnspent, inputNote);
+      // If we consolidated, need to include the new consolidated note in the tree
+      const allUnspent = shieldedNotes.filter(n => n.owner === walletAddress && !n.spent);
+      const merkleNotes = finalNote === suitableNote ? allUnspent : [...allUnspent.filter(n => n.nullifier !== finalNote.nullifier), finalNote];
+      const merkleProof = buildMerkleProof(merkleNotes, finalNote);
 
       const inputNoteStruct: Note = {
-        secret: BigInt(inputNote.secret),
-        amount: BigInt(inputNote.amount),
-        tokenMint: BigInt(inputNote.tokenMintField),
-        blinding: BigInt(inputNote.blinding),
-        rho: BigInt(inputNote.rho),
-        commitment: BigInt(inputNote.commitment),
-        nullifier: BigInt(inputNote.nullifier),
+        secret: BigInt(finalNote.secret),
+        amount: BigInt(finalNote.amount),
+        tokenMint: BigInt(finalNote.tokenMintField),
+        blinding: BigInt(finalNote.blinding),
+        rho: BigInt(finalNote.rho),
+        commitment: BigInt(finalNote.commitment),
+        nullifier: BigInt(finalNote.nullifier),
       };
 
-      // Step 5: Generate swap proof
+      // Step 4: Generate swap_v2 proof (supports partial swaps)
       onStatusUpdate('Generating ZK swap proof...');
-      const swapWitness = serializeSwapWitness({
+      const swapWitness = serializeSwapV2Witness({
         inputNote: inputNoteStruct,
         merkleProof,
-        outAmount: outputAmount,
+        swapAmount,
+        expectedOutAmount: outputAmount,
         outTokenMint,
         outSecret,
         outBlinding,
+        changeSecret,
+        changeBlinding,
       });
 
-      const swapProof = await proveCircuit('swap', swapWitness);
-      console.log('[ShieldedSwap] Swap proof generated');
+      const swapProof = await proveCircuit('swap_v2', swapWitness);
+      console.log('[ShieldedSwap] Swap V2 proof generated');
 
-      // Step 6: Execute on-chain shielded pool swap
+      // Step 5: Execute on-chain shielded pool swap V2
       onStatusUpdate('Executing private swap on-chain...');
       
+      // Convert nullifier to bytes
+      const nullBytes = BigInt(finalNote.nullifier).toString(16).padStart(64, '0');
       const inputNullifier = new Uint8Array(32);
-      const nullifierBigInt = BigInt(inputNote.nullifier);
-      for (let i = 31; i >= 0; i--) {
-        inputNullifier[i] = Number(nullifierBigInt & 0xffn);
-        nullifierBigInt >> 8n;
-      }
-      // Actually convert correctly
-      const nullBytes = BigInt(inputNote.nullifier).toString(16).padStart(64, '0');
       for (let i = 0; i < 32; i++) {
         inputNullifier[i] = parseInt(nullBytes.substring(i * 2, i * 2 + 2), 16);
       }
 
+      // Convert output commitment to bytes
       const outputCommitment = new Uint8Array(32);
-      const commitBytes = outputNote.commitment.toString(16).padStart(64, '0');
+      const outCommitBytes = outputNote.commitment.toString(16).padStart(64, '0');
       for (let i = 0; i < 32; i++) {
-        outputCommitment[i] = parseInt(commitBytes.substring(i * 2, i * 2 + 2), 16);
+        outputCommitment[i] = parseInt(outCommitBytes.substring(i * 2, i * 2 + 2), 16);
       }
 
-      // Convert ALL public signals to bytes (not just 3 - circuit has inputs + outputs)
-      // publicSignals order: [merkleRoot, nullifier, expectedOutAmount, inputCommitment, outputCommitment, inputAmount, inputTokenMint, outputTokenMint]
+      // Convert change commitment to bytes
+      const changeCommitment = new Uint8Array(32);
+      const changeCommitBytes = changeNote.commitment.toString(16).padStart(64, '0');
+      for (let i = 0; i < 32; i++) {
+        changeCommitment[i] = parseInt(changeCommitBytes.substring(i * 2, i * 2 + 2), 16);
+      }
+
+      // Convert public signals to big-endian bytes
       console.log('[ShieldedSwap] Public signals from prover:', swapProof.publicSignals);
       console.log('[ShieldedSwap] Public signals count:', swapProof.publicSignals.length);
       
-      // Convert public signals to big-endian bytes (EIP-196 format for alt_bn128)
       const publicInputs = swapProof.publicSignals.map((sig: string) => {
         const bytes = new Uint8Array(32);
         const value = BigInt(sig);
-        // Convert to big-endian (EIP-196 standard)
         for (let i = 31; i >= 0; i--) {
           bytes[31 - i] = Number((value >> BigInt(i * 8)) & 0xffn);
         }
         return bytes;
       });
 
-      // Convert proof bytes from base64 (prover service returns base64)
+      // Convert proof bytes from base64
       const proofBytes = base64ToBytes(swapProof.proofBytes);
       console.log('[ShieldedSwap] Proof bytes length:', proofBytes.length);
 
-      const swapSignature = await executeShieldedPoolSwap(
+      const swapSignature = await executeShieldedPoolSwapV2(
         keypair,
-        exactInputAmount,
+        swapAmount,
         minOutputAmount,
         inputIsNoc,
         inputNullifier,
         outputCommitment,
+        changeCommitment,
         proofBytes,
         publicInputs
       );
 
-      console.log('[ShieldedSwap] ✅ TRUE PRIVATE swap complete:', swapSignature);
+      console.log('[ShieldedSwap] ✅ TRUE PRIVATE swap V2 complete:', swapSignature);
 
-      // Step 7: Mark input note as spent, add output note
-      markNoteSpent(inputNote.nullifier);
+      // Step 6: Mark input note as spent, add output notes
+      markNoteSpent(finalNote.nullifier);
 
       const outputNoteRecord = snapshotNote(outputNote, keypair.publicKey, toToken, {
         signature: swapSignature,
       });
       addShieldedNote(outputNoteRecord);
 
-      const inputFormatted = (Number(exactInputAmount) / Math.pow(10, inputDecimals)).toFixed(inputDecimals === 9 ? 4 : 2);
+      // Add change note if there's any change
+      let changeNoteRecord: ShieldedNoteRecord | undefined;
+      if (changeAmount > 0n) {
+        changeNoteRecord = snapshotNote(changeNote, keypair.publicKey, fromToken, {
+          signature: swapSignature,
+        });
+        addShieldedNote(changeNoteRecord);
+        console.log(`[ShieldedSwap] Added change note: ${changeDisplay} ${fromToken}`);
+      }
+
+      const inputFormatted = (Number(swapAmount) / Math.pow(10, inputDecimals)).toFixed(inputDecimals === 9 ? 4 : 2);
       const outputFormatted = (Number(outputAmount) / Math.pow(10, outputDecimals)).toFixed(outputDecimals === 9 ? 4 : 2);
 
       onStatusUpdate(`✅ TRUE PRIVATE swap complete! ${inputFormatted} ${fromToken} → ${outputFormatted} ${toToken}`);
@@ -340,6 +377,8 @@ export async function executeShieldedSwap(
         inputAmount: inputFormatted,
         outputAmount: outputFormatted,
         outputNote: outputNoteRecord,
+        changeNote: changeNoteRecord,
+        changeAmount: changeDisplay,
       };
     }
     

@@ -35,6 +35,16 @@ pub struct ShieldedSwapExecuted {
 }
 
 #[event]
+pub struct ShieldedSwapV2Executed {
+    pub input_nullifier: [u8; 32],
+    pub output_commitment: [u8; 32],
+    pub change_commitment: [u8; 32],
+    pub is_noc_to_sol: bool,
+    pub swap_amount: u64,
+    pub output_amount: u64,
+}
+
+#[event]
 pub struct TransparentSwapExecuted {
     pub user: Pubkey,
     pub is_sol_to_noc: bool,

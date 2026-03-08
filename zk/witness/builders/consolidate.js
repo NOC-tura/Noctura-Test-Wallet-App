@@ -1,101 +1,100 @@
-export function serializeConsolidateWitness({
-  inputNotes,
-  merkleProofs,
-  outputNote,
-}) {
-  const MAX_INPUTS = 8;
-  const TREE_HEIGHT = 20;
-
-  if (inputNotes.length === 0 || inputNotes.length > MAX_INPUTS) {
-    throw new Error(`Consolidate circuit supports 1-${MAX_INPUTS} input notes, got ${inputNotes.length}`);
-  }
-
-  if (inputNotes.length !== merkleProofs.length) {
-    throw new Error(
-      `Mismatch: ${inputNotes.length} notes but ${merkleProofs.length} merkle proofs`,
-    );
-  }
-
-  // All notes must have same token mint
-  const firstTokenMint = inputNotes[0].tokenMint;
-  for (let i = 1; i < inputNotes.length; i++) {
-    if (inputNotes[i].tokenMint !== firstTokenMint) {
-      throw new Error('All input notes must have the same token mint for consolidation');
+/**
+ * Serialize consolidation witness for circuit
+ * Consolidates up to 8 input notes into 1 output note
+ *
+ * CRITICAL: The circuit is compiled with nInputs=8 (MAX_INPUTS), so the witness
+ * MUST have exactly 8 values for all input arrays. Unused slots are padded with 0.
+ */
+export function serializeConsolidateWitness({ inputNotes, merkleProofs, outputNote, }) {
+    const MAX_INPUTS = 8;
+    if (inputNotes.length === 0 || inputNotes.length > MAX_INPUTS) {
+        throw new Error(`Consolidate circuit supports 1-${MAX_INPUTS} input notes, got ${inputNotes.length}`);
     }
-  }
-
-  // Verify output note has same token mint
-  if (outputNote.tokenMint !== firstTokenMint) {
-    throw new Error('Output note must have same token mint as input notes');
-  }
-
-  // Verify sum: sum of inputs = output amount
-  const inputSum = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
-  if (inputSum !== outputNote.amount) {
-    throw new Error(
-      `Amount mismatch: inputs sum to ${inputSum}, output is ${outputNote.amount}`,
-    );
-  }
-
-  // Pad input arrays to MAX_INPUTS (8) with zeros
-  // CRITICAL: The circuit is compiled with Consolidate(8), so it expects exactly 8 values
-  const paddedSecrets = [];
-  const paddedAmounts = [];
-  const paddedBlindings = [];
-  const paddedRhos = [];
-  const paddedNullifiers = [];
-  
-  // Add real values
-  for (let i = 0; i < inputNotes.length; i++) {
-    paddedSecrets[i] = inputNotes[i].secret.toString();
-    paddedAmounts[i] = inputNotes[i].amount.toString();
-    paddedBlindings[i] = inputNotes[i].blinding.toString();
-    paddedRhos[i] = inputNotes[i].rho.toString();
-    paddedNullifiers[i] = inputNotes[i].nullifier.toString();
-  }
-  
-  // Fill remaining slots with zeros
-  for (let i = inputNotes.length; i < MAX_INPUTS; i++) {
-    paddedSecrets[i] = '0';
-    paddedAmounts[i] = '0';
-    paddedBlindings[i] = '0';
-    paddedRhos[i] = '0';
-    paddedNullifiers[i] = '0';
-  }
-
-  // Pad merkle proofs to MAX_INPUTS (8) with zero-filled proofs
-  const paddedPathElements = [];
-  const paddedPathIndices = [];
-  
-  for (let i = 0; i < merkleProofs.length; i++) {
-    paddedPathElements[i] = merkleProofs[i].pathElements.map((x) => x.toString());
-    paddedPathIndices[i] = merkleProofs[i].pathIndices.map((x) => x.toString());
-  }
-  
-  // Fill remaining merkle proof slots with zero arrays
-  for (let i = merkleProofs.length; i < MAX_INPUTS; i++) {
-    paddedPathElements[i] = Array(TREE_HEIGHT).fill('0');
-    paddedPathIndices[i] = Array(TREE_HEIGHT).fill('0');
-  }
-
-  return {
-    inSecrets: paddedSecrets,
-    inAmounts: paddedAmounts,
-    tokenMint: firstTokenMint.toString(),
-    blindings: paddedBlindings,
-    rhos: paddedRhos,
-    pathElements: paddedPathElements,
-    pathIndices: paddedPathIndices,
-    merkleRoot: merkleProofs[0].root.toString(),
-    outSecret: outputNote.secret.toString(),
-    outBlinding: outputNote.blinding.toString(),
-    nullifiers: paddedNullifiers,
-  };
+    if (inputNotes.length !== merkleProofs.length) {
+        throw new Error(`Mismatch: ${inputNotes.length} notes but ${merkleProofs.length} merkle proofs`);
+    }
+    // All notes must have same token mint
+    const firstTokenMint = inputNotes[0].tokenMint;
+    for (let i = 1; i < inputNotes.length; i++) {
+        if (inputNotes[i].tokenMint !== firstTokenMint) {
+            throw new Error('All input notes must have the same token mint for consolidation');
+        }
+    }
+    // Verify output note has same token mint
+    if (outputNote.tokenMint !== firstTokenMint) {
+        throw new Error('Output note must have same token mint as input notes');
+    }
+    // Verify sum: sum of inputs = output amount
+    const inputSum = inputNotes.reduce((sum, note) => sum + note.amount, 0n);
+    if (inputSum !== outputNote.amount) {
+        throw new Error(`Amount mismatch: inputs sum to ${inputSum}, output is ${outputNote.amount}`);
+    }
+    // Pad input arrays to MAX_INPUTS with zeros
+    // This is required because the circuit is instantiated with Consolidate(8)
+    const paddedSecrets = [];
+    const paddedAmounts = [];
+    const paddedBlindings = [];
+    const paddedRhos = [];
+    const paddedNullifiers = [];
+    // Add real values
+    for (let i = 0; i < inputNotes.length; i++) {
+        paddedSecrets[i] = inputNotes[i].secret.toString();
+        paddedAmounts[i] = inputNotes[i].amount.toString();
+        paddedBlindings[i] = inputNotes[i].blinding.toString();
+        paddedRhos[i] = inputNotes[i].rho.toString();
+        paddedNullifiers[i] = inputNotes[i].nullifier.toString();
+    }
+    // Fill remaining slots with zeros
+    for (let i = inputNotes.length; i < MAX_INPUTS; i++) {
+        paddedSecrets[i] = '0';
+        paddedAmounts[i] = '0';
+        paddedBlindings[i] = '0';
+        paddedRhos[i] = '0';
+        paddedNullifiers[i] = '0';
+    }
+    // Merkle proofs: must have exactly 8 entries
+    const TREE_HEIGHT = 20;
+    const paddedPathElements = [];
+    const paddedPathIndices = [];
+    // Add real merkle proofs
+    for (let i = 0; i < merkleProofs.length; i++) {
+        paddedPathElements[i] = merkleProofs[i].pathElements.map((x) => x.toString());
+        paddedPathIndices[i] = merkleProofs[i].pathIndices.map((x) => x.toString());
+    }
+    // Fill remaining slots with zero-filled proofs
+    for (let i = merkleProofs.length; i < MAX_INPUTS; i++) {
+        paddedPathElements[i] = Array(TREE_HEIGHT).fill('0');
+        paddedPathIndices[i] = Array(TREE_HEIGHT).fill('0');
+    }
+    const witness = {
+        inSecrets: paddedSecrets,
+        inAmounts: paddedAmounts,
+        tokenMint: firstTokenMint.toString(),
+        blindings: paddedBlindings,
+        rhos: paddedRhos,
+        pathElements: paddedPathElements,
+        pathIndices: paddedPathIndices,
+        merkleRoot: merkleProofs[0].root.toString(),
+        outSecret: outputNote.secret.toString(),
+        outBlinding: outputNote.blinding.toString(),
+        nullifiers: paddedNullifiers,
+    };
+    // DEBUG: Log the actual array lengths being sent
+    console.log('[ConsolidateWitness] Built witness with:');
+    console.log(`  - inSecrets: ${witness.inSecrets.length} entries`);
+    console.log(`  - inAmounts: ${witness.inAmounts.length} entries`);
+    console.log(`  - blindings: ${witness.blindings.length} entries`);
+    console.log(`  - rhos: ${witness.rhos.length} entries`);
+    console.log(`  - pathElements: ${witness.pathElements.length} rows`);
+    console.log(`  - nullifiers: ${witness.nullifiers.length} entries`);
+    console.log(`  - Actual input notes: ${inputNotes.length}, merkle proofs: ${merkleProofs.length}`);
+    return witness;
 }
-
-export function serializeConsolidatePublicInputs(
-  inputNotes,
-  merkleRoot,
-) {
-  return [...inputNotes.map((n) => n.nullifier), merkleRoot];
+/**
+ * Public inputs for consolidate circuit
+ * Returns [nullifier1, nullifier2, ..., nullifierN, merkleRoot]
+ * (circuit main component declares: component main {public [nullifiers, merkleRoot]})
+ */
+export function serializeConsolidatePublicInputs(inputNotes, merkleRoot) {
+    return [...inputNotes.map((n) => n.nullifier), merkleRoot];
 }

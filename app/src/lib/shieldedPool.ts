@@ -290,6 +290,68 @@ export async function executeShieldedPoolSwap(
 }
 
 /**
+ * Execute shielded swap V2 - supports partial swaps with change
+ * User can swap X from a note of Y, receiving output + change (Y - X)
+ */
+export async function executeShieldedPoolSwapV2(
+  keypair: Keypair,
+  swapAmount: bigint,
+  minOutputAmount: bigint,
+  inputIsNoc: boolean,
+  inputNullifier: Uint8Array,
+  outputCommitment: Uint8Array,
+  changeCommitment: Uint8Array,
+  proof: Uint8Array,
+  publicInputs: Uint8Array[]
+): Promise<string> {
+  const program = getProgramForKeypair(keypair);
+  const pdas = deriveShieldPdas();
+  const { merkleTree, nullifierSet, shieldedPool, swapV2Verifier } = pdas;
+
+  // Debug: log what we're sending
+  console.log('[executeShieldedPoolSwapV2] swapAmount:', swapAmount.toString());
+  console.log('[executeShieldedPoolSwapV2] minOutputAmount:', minOutputAmount.toString());
+  console.log('[executeShieldedPoolSwapV2] inputIsNoc:', inputIsNoc, '-> input_is_sol:', !inputIsNoc);
+  console.log('[executeShieldedPoolSwapV2] proof length:', proof.length);
+  console.log('[executeShieldedPoolSwapV2] publicInputs count:', publicInputs.length);
+
+  // Build transaction with compute budget
+  const tx = new Transaction();
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }));
+
+  const swapIx = await program.methods
+    .shieldedPoolSwapV2(
+      new BN(swapAmount.toString()),
+      new BN(minOutputAmount.toString()),
+      !inputIsNoc, // input_is_sol on-chain
+      Array.from(inputNullifier),
+      Array.from(outputCommitment),
+      Array.from(changeCommitment),
+      Buffer.from(proof),
+      publicInputs.map(pi => Array.from(pi))
+    )
+    .accounts({
+      shieldedPool,
+      merkleTree,
+      nullifierSet,
+      swapV2Verifier,
+    })
+    .instruction();
+
+  tx.add(swapIx);
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await pollForConfirmation(connection, sig, 'executeShieldedPoolSwapV2');
+
+  console.log('[ShieldedPool] Swap V2 executed:', sig);
+  return sig;
+}
+
+/**
  * Check if the shielded pool is available and has liquidity
  */
 export async function isShieldedPoolAvailable(): Promise<boolean> {

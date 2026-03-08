@@ -1910,6 +1910,255 @@ export default function App() {
           throw new Error(result.error || 'Shielded swap failed');
         }
 
+        // =====================================================
+        // COLLECT 0.25 NOC PRIVACY FEE FROM CHANGE NOTE
+        // =====================================================
+        if (fromToken === 'NOC' && result.changeNote) {
+          const changeAmountBigInt = BigInt(result.changeNote.amount);
+          
+          if (changeAmountBigInt >= PRIVACY_FEE_ATOMS) {
+            setSwapStatusMessage('Collecting privacy fee (0.25 NOC)...');
+            console.log('[Swap] Collecting 0.25 NOC privacy fee from change note');
+            
+            const nocMint = new PublicKey(NOC_TOKEN_MINT);
+            const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
+            const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner, false);
+            
+            const allUnspentNotes = useShieldedNotes.getState().notes.filter(
+              n => n.owner === walletAddress && !n.spent
+            );
+            
+            if (changeAmountBigInt === PRIVACY_FEE_ATOMS) {
+              // Change note is exactly 0.25 NOC - withdraw directly to fee collector
+              const feeMerkleProof = buildMerkleProof(allUnspentNotes, result.changeNote);
+              
+              const feeInputNote: Note = {
+                secret: BigInt(result.changeNote.secret),
+                amount: BigInt(result.changeNote.amount),
+                tokenMint: getCorrectTokenMint(result.changeNote),
+                blinding: BigInt(result.changeNote.blinding),
+                rho: BigInt(result.changeNote.rho),
+                commitment: BigInt(result.changeNote.commitment),
+                nullifier: BigInt(result.changeNote.nullifier),
+              };
+              
+              setSwapStatusMessage('Generating fee proof...');
+              const feeWitness = serializeWithdrawWitness({
+                inputNote: feeInputNote,
+                merkleProof: feeMerkleProof,
+                receiver: pubkeyToField(feeCollectorOwner),
+              });
+              
+              const feeProof = await proveCircuit('withdraw', feeWitness);
+              
+              setSwapStatusMessage('Submitting privacy fee...');
+              const feeRes = await relayWithdraw({
+                proof: feeProof,
+                amount: result.changeNote.amount,
+                nullifier: result.changeNote.nullifier,
+                recipient: feeCollectorOwner.toBase58(),
+                recipientAta: feeCollectorAta.toBase58(),
+                mint: nocMint.toBase58(),
+                collectFee: false,
+              });
+              console.log('[Swap] ✅ Fee collected (0.25 NOC):', feeRes.signature);
+              markNoteSpent(result.changeNote.nullifier);
+              
+            } else {
+              // Change > 0.25 NOC - split into fee note + remaining, then withdraw fee
+              setSwapStatusMessage('Preparing fee note...');
+              
+              const splitInputNote: Note = {
+                secret: BigInt(result.changeNote.secret),
+                amount: BigInt(result.changeNote.amount),
+                tokenMint: getCorrectTokenMint(result.changeNote),
+                blinding: BigInt(result.changeNote.blinding),
+                rho: BigInt(result.changeNote.rho),
+                commitment: BigInt(result.changeNote.commitment),
+                nullifier: BigInt(result.changeNote.nullifier),
+              };
+              
+              const splitMerkleProof = buildMerkleProof(allUnspentNotes, result.changeNote);
+              
+              const feeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
+              const remainingAmount = changeAmountBigInt - PRIVACY_FEE_ATOMS;
+              const remainingNote = createNoteFromSecrets(remainingAmount, 'NOC');
+              
+              const splitWitness = serializeTransferWitness({
+                inputNote: splitInputNote,
+                merkleProof: splitMerkleProof,
+                outputNote1: feeNote,
+                outputNote2: remainingNote,
+              });
+              
+              setSwapStatusMessage('Generating split proof...');
+              const splitProof = await proveCircuit('transfer', splitWitness);
+              
+              setSwapStatusMessage('Splitting change note...');
+              const splitResult = await relayTransfer({
+                proof: splitProof,
+                nullifier: result.changeNote.nullifier,
+                outputCommitment1: feeNote.commitment.toString(),
+                outputCommitment2: remainingNote.commitment.toString(),
+              });
+              
+              console.log('[Swap] ✅ Split change note for fee:', splitResult.signature);
+              markNoteSpent(result.changeNote.nullifier);
+              
+              const feeNoteRecord = snapshotNote(feeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+              const remainingNoteRecord = snapshotNote(remainingNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+              addShieldedNote(feeNoteRecord);
+              addShieldedNote(remainingNoteRecord);
+              
+              await new Promise(r => setTimeout(r, 200));
+              
+              // Now withdraw the fee note to fee collector
+              const updatedUnspentNotes = useShieldedNotes.getState().notes.filter(
+                n => n.owner === walletAddress && !n.spent
+              );
+              const feeMerkleProof = buildMerkleProof(updatedUnspentNotes, feeNoteRecord);
+              
+              const feeInputNote: Note = {
+                secret: BigInt(feeNoteRecord.secret),
+                amount: BigInt(feeNoteRecord.amount),
+                tokenMint: getCorrectTokenMint(feeNoteRecord),
+                blinding: BigInt(feeNoteRecord.blinding),
+                rho: BigInt(feeNoteRecord.rho),
+                commitment: BigInt(feeNoteRecord.commitment),
+                nullifier: BigInt(feeNoteRecord.nullifier),
+              };
+              
+              setSwapStatusMessage('Generating fee proof...');
+              const feeWitness = serializeWithdrawWitness({
+                inputNote: feeInputNote,
+                merkleProof: feeMerkleProof,
+                receiver: pubkeyToField(feeCollectorOwner),
+              });
+              
+              const feeProof = await proveCircuit('withdraw', feeWitness);
+              
+              setSwapStatusMessage('Submitting privacy fee...');
+              const feeRes = await relayWithdraw({
+                proof: feeProof,
+                amount: feeNoteRecord.amount,
+                nullifier: feeNoteRecord.nullifier,
+                recipient: feeCollectorOwner.toBase58(),
+                recipientAta: feeCollectorAta.toBase58(),
+                mint: nocMint.toBase58(),
+                collectFee: false,
+              });
+              console.log('[Swap] ✅ Fee collected (0.25 NOC):', feeRes.signature);
+              markNoteSpent(feeNoteRecord.nullifier);
+            }
+          } else {
+            console.log('[Swap] Change note too small for fee (', changeAmountBigInt.toString(), 'atoms) - fee skipped');
+          }
+        } else if (toToken === 'NOC' && result.outputNote) {
+          // SOL → NOC swap: collect fee from the output NOC note
+          const outputAmountBigInt = BigInt(result.outputNote.amount);
+          
+          if (outputAmountBigInt >= PRIVACY_FEE_ATOMS) {
+            setSwapStatusMessage('Collecting privacy fee (0.25 NOC)...');
+            console.log('[Swap] Collecting 0.25 NOC privacy fee from output note');
+            
+            const nocMint = new PublicKey(NOC_TOKEN_MINT);
+            const feeCollectorOwner = new PublicKey('55qTjy2AAFxohJtzKbKbZHjQBNwAven2vMfFVUfDZnax');
+            const feeCollectorAta = getAssociatedTokenAddressSync(nocMint, feeCollectorOwner, false);
+            
+            const allUnspentNotes = useShieldedNotes.getState().notes.filter(
+              n => n.owner === walletAddress && !n.spent
+            );
+            
+            // Need to split output note: fee + remaining
+            setSwapStatusMessage('Preparing fee note...');
+            
+            const splitInputNote: Note = {
+              secret: BigInt(result.outputNote.secret),
+              amount: BigInt(result.outputNote.amount),
+              tokenMint: getCorrectTokenMint(result.outputNote),
+              blinding: BigInt(result.outputNote.blinding),
+              rho: BigInt(result.outputNote.rho),
+              commitment: BigInt(result.outputNote.commitment),
+              nullifier: BigInt(result.outputNote.nullifier),
+            };
+            
+            const splitMerkleProof = buildMerkleProof(allUnspentNotes, result.outputNote);
+            
+            const feeNote = createNoteFromSecrets(PRIVACY_FEE_ATOMS, 'NOC');
+            const remainingAmount = outputAmountBigInt - PRIVACY_FEE_ATOMS;
+            const remainingNote = createNoteFromSecrets(remainingAmount, 'NOC');
+            
+            const splitWitness = serializeTransferWitness({
+              inputNote: splitInputNote,
+              merkleProof: splitMerkleProof,
+              outputNote1: feeNote,
+              outputNote2: remainingNote,
+            });
+            
+            setSwapStatusMessage('Generating split proof...');
+            const splitProof = await proveCircuit('transfer', splitWitness);
+            
+            setSwapStatusMessage('Splitting output note...');
+            const splitResult = await relayTransfer({
+              proof: splitProof,
+              nullifier: result.outputNote.nullifier,
+              outputCommitment1: feeNote.commitment.toString(),
+              outputCommitment2: remainingNote.commitment.toString(),
+            });
+            
+            console.log('[Swap] ✅ Split output note for fee:', splitResult.signature);
+            markNoteSpent(result.outputNote.nullifier);
+            
+            const feeNoteRecord = snapshotNote(feeNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+            const remainingNoteRecord = snapshotNote(remainingNote, keypair.publicKey, 'NOC', { signature: splitResult.signature });
+            addShieldedNote(feeNoteRecord);
+            addShieldedNote(remainingNoteRecord);
+            
+            await new Promise(r => setTimeout(r, 200));
+            
+            // Now withdraw the fee note to fee collector
+            const updatedUnspentNotes = useShieldedNotes.getState().notes.filter(
+              n => n.owner === walletAddress && !n.spent
+            );
+            const feeMerkleProof = buildMerkleProof(updatedUnspentNotes, feeNoteRecord);
+            
+            const feeInputNote: Note = {
+              secret: BigInt(feeNoteRecord.secret),
+              amount: BigInt(feeNoteRecord.amount),
+              tokenMint: getCorrectTokenMint(feeNoteRecord),
+              blinding: BigInt(feeNoteRecord.blinding),
+              rho: BigInt(feeNoteRecord.rho),
+              commitment: BigInt(feeNoteRecord.commitment),
+              nullifier: BigInt(feeNoteRecord.nullifier),
+            };
+            
+            setSwapStatusMessage('Generating fee proof...');
+            const feeWitness = serializeWithdrawWitness({
+              inputNote: feeInputNote,
+              merkleProof: feeMerkleProof,
+              receiver: pubkeyToField(feeCollectorOwner),
+            });
+            
+            const feeProof = await proveCircuit('withdraw', feeWitness);
+            
+            setSwapStatusMessage('Submitting privacy fee...');
+            const feeRes = await relayWithdraw({
+              proof: feeProof,
+              amount: feeNoteRecord.amount,
+              nullifier: feeNoteRecord.nullifier,
+              recipient: feeCollectorOwner.toBase58(),
+              recipientAta: feeCollectorAta.toBase58(),
+              mint: nocMint.toBase58(),
+              collectFee: false,
+            });
+            console.log('[Swap] ✅ Fee collected (0.25 NOC) from output:', feeRes.signature);
+            markNoteSpent(feeNoteRecord.nullifier);
+          } else {
+            console.log('[Swap] Output note too small for fee (', outputAmountBigInt.toString(), 'atoms) - fee skipped');
+          }
+        }
+        
+        setSwapStatusMessage('');
         setStatus(`✅ Swapped ${amount} ${fromToken} → ${result.outputAmount} ${toToken} privately`);
         
         // Record shielded swap in transaction history
